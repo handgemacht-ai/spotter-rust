@@ -3,6 +3,29 @@
 This checklist maps the carried-over Elixir command surface to the Rust CLI.
 Every checked row has a fixture-backed integration path in `tests/`.
 
+## Source Verification
+
+The carried-over command and flag rows were checked against the source
+`@spotter` Mix task implementations, not only against prose documentation:
+
+- `lib/mix/tasks/spotter.transcripts.ex`
+- `lib/mix/tasks/spotter.transcripts.sync.ex`
+- `lib/mix/tasks/spotter.transcripts.search.ex`
+- `lib/mix/tasks/spotter.transcripts.inspect.ex`
+- `lib/mix/tasks/spotter.transcripts.compare.ex`
+- `lib/mix/tasks/spotter.transcripts.aggregate.ex`
+- `lib/mix/tasks/spotter.transcripts.audit.ex`
+- `lib/mix/tasks/spotter.transcripts.errors.ex`
+- `lib/mix/tasks/spotter.transcripts.health.ex`
+- `lib/mix/tasks/spotter.transcripts.sequences.ex`
+- `lib/mix/tasks/spotter.transcripts.slice.register.ex`
+
+For commands using `@switches` or `OptionParser.parse(strict: ...)`, this
+checklist follows the actual Elixir switch atoms. In particular, source docs may
+refer to `--min-duration-ms`, but the carried-over search task accepts
+`--min-duration`; `slice.register` is the only transcript Mix task using
+`--min-duration-ms`, and that Phoenix-specific command is deliberately dropped.
+
 ## Ported Commands
 
 | Status | Elixir command | Elixir flag | Rust command | Rust flag |

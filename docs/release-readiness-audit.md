@@ -83,7 +83,7 @@ not satisfied by local implementation alone.
 | Global SQLite DB with XDG-style defaults and overrides | `src/paths.rs`, `README.md` |
 | Config-driven transcript roots and aliases | `src/config.rs`, `spotter init`, `spotter projects *` tests |
 | Ported transcript subcommands exist | `tests/cli_surface.rs`, `tests/cli_goldens.rs` |
-| Carried-over flag surface is accepted | `docs/subcommand-parity-checklist.md`, `tests/cli_flag_parity.rs` |
+| Carried-over flag surface is accepted | `docs/subcommand-parity-checklist.md`, source Mix task verification notes in that checklist, `tests/cli_flag_parity.rs` |
 | Repeatable compare cohort flags match Elixir `:keep` switches | `tests/cli_flag_parity.rs` |
 | `slice.register` intentionally dropped | `docs/subcommand-parity-checklist.md` |
 | JSONL unknown fields fail loudly | `serde(deny_unknown_fields)` structs and property tests in `src/jsonl.rs` |
