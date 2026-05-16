@@ -4,7 +4,8 @@ Status as of 2026-05-16: repo-owned implementation and verification gates are
 green in CI; release PR signoff is enforced by the release preflight and the
 current live signoff evidence is tracked in issue #1. The current maintainer
 decision is not to publish to crates.io or create a release tag for now, so
-external release state is intentionally not complete.
+external release state is intentionally not complete. `README.md` documents the
+current source-only install/run path while that decision is active.
 
 Current run IDs and artifact-download evidence are recorded in
 [issue #1](https://github.com/handgemacht-ai/spotter-rust/issues/1). Refresh
@@ -43,7 +44,7 @@ not satisfied by local implementation alone.
 | Open source under MIT | Done | `LICENSE`; `Cargo.toml` `license = "MIT"` |
 | No Phoenix app dependency, HTTP listener, hook ingestion, telemetry, phone-home, or auto-update | Verified | `scripts/check-local-only.py` is run by CI and release workflows; `README.md` documents local-only behavior |
 | Single-user local operation with SQLite default locking | Done | `rusqlite` is used directly; no server or multi-process coordination layer exists |
-| Published to crates.io as `spotter` | Deferred | Current maintainer decision is no crates.io publish for now. `scripts/check-crates-io-release-ready.py` still fails because crates.io already has `spotter` owned by `kohbis`; crates.io has no `@handgemacht-ai/spotter`-style package scope, so any future publish requires owner transfer/sharing or a flat rename such as `handgemacht-spotter` |
+| Published to crates.io as `spotter` | Deferred | Current maintainer decision is no crates.io publish for now. `README.md` documents source-only install/run commands. `scripts/check-crates-io-release-ready.py` still fails because crates.io already has `spotter` owned by `kohbis`; crates.io has no `@handgemacht-ai/spotter`-style package scope, so any future publish requires owner transfer/sharing or a flat rename such as `handgemacht-spotter` |
 | Prebuilt GitHub Release binaries for Linux x86_64, Linux aarch64, macOS x86_64, macOS aarch64, Windows x86_64 | Partially verified | `.github/workflows/release.yml` contains all five targets; `publish=false` dry runs have built all five targets and their downloaded artifacts have passed `scripts/check-github-release-assets.py --expect-version 0.1.5 --require-runnable-host`; no tag-triggered GitHub Release exists yet |
 | CHANGELOG-led versioning | Done | `CHANGELOG.md` has a `0.1.5` entry; release workflow checks manifest version against the tag and changelog |
 | Global SQLite DB at XDG-style data dir with override | Done | `src/paths.rs`; CLI accepts `--db`; README documents `~/.local/share/spotter/spotter.db` |
@@ -100,7 +101,8 @@ not satisfied by local implementation alone.
 | Release workflow coverage | `.github/workflows/release.yml`, `scripts/check-release-workflow.py`; release tags fail fast if the release PR signoff is missing, `CRATES_IO_TOKEN` is missing, or the manifest package/version is not publishable on crates.io; `workflow_dispatch` can dry-run verify/build without publishing; workflow actions are pinned to Node 24-compatible majors |
 | GitHub release config preflight | `scripts/check-github-release-config.py --repo handgemacht-ai/spotter-rust` verifies the `CRATES_IO_TOKEN` repository secret name and `CRATES_IO_OWNER_LOGIN` repository variable before tagging |
 | Coverage thresholds | fresh `cargo llvm-cov`: 89.42% lines, 75.60% branches |
-| Packaging and install path | `cargo package --allow-dirty --locked`, `cargo publish --dry-run --allow-dirty --locked`, `cargo install --path . --locked` |
+| Source-only install path | `README.md`; `cargo install --path . --locked`; `cargo run --locked -- --help` |
+| Package dry run | `cargo package --locked`; `cargo publish --dry-run --locked`; current clean-checkout evidence is tracked in issue #1 |
 | Release dry run | GitHub Actions Release `publish=false` dry runs verify, build all five target artifacts/checksums, and skip publish; current run evidence is tracked in issue #1 |
 | Public git history | Public `main` is pushed to `https://github.com/handgemacht-ai/spotter-rust` |
 | Current CI evidence | Tracked in issue #1 after each release-candidate commit |
@@ -138,8 +140,8 @@ scripts/test-github-release-config.py
 scripts/test-release-pr-signoff.py
 scripts/test-github-release-assets.py
 scripts/test-release-complete.py
-cargo package --allow-dirty --locked
-cargo publish --dry-run --allow-dirty --locked
+cargo package --locked
+cargo publish --dry-run --locked
 cargo install --path . --locked --root target/install-smoke
 scripts/check-install-smoke.sh
 ```
@@ -187,16 +189,18 @@ These GOAL requirements still need external release work:
 
 1. Do not create `v0.1.5`, do not publish to crates.io, and do not create a
    GitHub Release while the no-publish decision is active.
-2. Keep CI and `publish=false` release dry runs green for the current
+2. Keep `README.md` aligned with the source-only install/run path while the
+   no-publish decision is active.
+3. Keep CI and `publish=false` release dry runs green for the current
    release-candidate commit.
-3. If the publish decision changes, resolve the crates.io package-name path:
+4. If the publish decision changes, resolve the crates.io package-name path:
    owner transfer/sharing for `spotter`, or a flat rename such as
    `handgemacht-spotter` while deciding whether the installed binary remains
    `spotter`.
-4. Configure the repository `CRATES_IO_TOKEN` secret and `CRATES_IO_OWNER_LOGIN`
+5. Configure the repository `CRATES_IO_TOKEN` secret and `CRATES_IO_OWNER_LOGIN`
    variable only after publish ownership is ready.
-5. Before tagging, run `scripts/check-release-pr-signoff.py`; if it fails,
+6. Before tagging, run `scripts/check-release-pr-signoff.py`; if it fails,
    repeat the release PR signoff for the final release commit.
-6. Create and push the `v0.1.5` tag on `main`, let
+7. Create and push the `v0.1.5` tag on `main`, let
    `.github/workflows/release.yml` publish, and verify GitHub Release
    assets/checksums plus crates.io package availability.
