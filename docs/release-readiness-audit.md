@@ -1,9 +1,8 @@
 # Release Readiness Audit
 
 Status as of 2026-05-16: local implementation and local verification are ready;
-external release state is not complete because this checkout has no git remote,
-no release PR, no pushed release tag, no GitHub Release artifacts, and no
-crates.io publish.
+external release state is not complete because there is no release PR, no
+pushed release tag, no GitHub Release artifacts, and no crates.io publish.
 
 ## Objective
 
@@ -38,7 +37,7 @@ verify it against `GOAL.md`.
 | Release workflow coverage | `.github/workflows/release.yml`, `scripts/check-release-workflow.py` |
 | Coverage thresholds | fresh `cargo llvm-cov`: 89.42% lines, 75.60% branches |
 | Packaging and install path | `cargo package --allow-dirty --locked`, `cargo publish --dry-run --allow-dirty --locked`, `cargo install --path . --locked` |
-| Local git history | Initial project commit on `main` |
+| Public git history | Public `main` is pushed to `https://github.com/handgemacht-ai/spotter-rust` |
 
 ## Verified Commands
 
@@ -91,22 +90,22 @@ Observed local performance evidence:
 
 ## External Blockers
 
-These GOAL requirements cannot be satisfied from the current checkout alone:
+These GOAL requirements still need external release work:
 
 | Requirement | Current state |
 | --- | --- |
 | Release PR checklist signed off | No PR exists in this checkout |
-| Tagged on `main` | Local `v0.1.0` tag points at `main`; no git remote to push it |
-| GitHub release matrix produced all five binaries | Release workflow exists but has not run remotely |
-| GitHub Release assets and checksums attached | Not possible without a remote release |
+| Tagged on `main` | Local `v0.1.0` tag points at `main`; it has not been pushed to `origin` |
+| GitHub release matrix produced all five binaries | Release workflow exists but has not run from a remote tag |
+| GitHub Release assets and checksums attached | Not done; requires pushing the release tag |
 | Published to crates.io | Dry-run passes; real publish needs credentials and ownership |
 | Published binary `spotter --version` matches tag | Local binary reports `spotter 0.1.0`; published binaries do not exist yet |
 
 ## Handoff Steps
 
-1. Add a git remote for the public `spotter-rust` repository.
-2. Push local `main` or open a release PR from the initial project commit.
-3. Complete the PR checklist in `.github/PULL_REQUEST_TEMPLATE.md`.
+1. Confirm the `main` CI run is green on GitHub.
+2. Open or otherwise complete the release checklist in `.github/PULL_REQUEST_TEMPLATE.md`.
+3. Confirm the repository has the `CRATES_IO_TOKEN` secret and crates.io package ownership is ready.
 4. Push the `v0.1.0` tag on `main`.
 5. Let `.github/workflows/release.yml` build and publish artifacts.
 6. Verify GitHub Release assets/checksums and crates.io package availability.
