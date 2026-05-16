@@ -18,6 +18,7 @@ REQUIRED_SNIPPETS = {
     "release preflight": "release-preflight:",
     "release preflight dependency": "needs: release-preflight",
     "crates.io token preflight": "CRATES_IO_TOKEN repository secret is required for release publishing",
+    "crates.io package preflight": "scripts/check-crates-io-release-ready.py",
     "main ancestry check": 'git merge-base --is-ancestor "$GITHUB_SHA" origin/main',
     "changelog check": 'grep -q "^## ${version}$" CHANGELOG.md',
     "flag parity test": "--test cli_flag_parity",

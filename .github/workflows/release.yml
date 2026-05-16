@@ -9,6 +9,7 @@ jobs:
   release-preflight:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Check crates.io token configured
         shell: bash
         env:
@@ -18,6 +19,10 @@ jobs:
             echo "CRATES_IO_TOKEN repository secret is required for release publishing" >&2
             exit 1
           fi
+      - name: Check crates.io package publishability
+        env:
+          CRATES_IO_OWNER_LOGIN: ${{ vars.CRATES_IO_OWNER_LOGIN }}
+        run: scripts/check-crates-io-release-ready.py
 
   verify:
     needs: release-preflight
