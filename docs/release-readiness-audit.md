@@ -10,6 +10,48 @@ Build `spotter`, a standalone MIT-licensed Rust CLI that replaces the
 `mix spotter.transcripts.*` transcript command suite for Claude Code users, and
 verify it against `GOAL.md`.
 
+## Completion Audit Checklist
+
+This checklist maps the explicit `GOAL.md` requirements to concrete evidence.
+Items marked blocked require external release ownership or credentials and are
+not satisfied by local implementation alone.
+
+| GOAL requirement | Status | Evidence |
+| --- | --- | --- |
+| Public standalone Rust CLI named `spotter` | Done | `Cargo.toml` package name is `spotter`; `src/main.rs` is a CLI entrypoint |
+| Open source under MIT | Done | `LICENSE`; `Cargo.toml` `license = "MIT"` |
+| No Phoenix app dependency, HTTP listener, hook ingestion, telemetry, phone-home, or auto-update | Verified | `scripts/check-local-only.py` is run by CI and release workflows; `README.md` documents local-only behavior |
+| Single-user local operation with SQLite default locking | Done | `rusqlite` is used directly; no server or multi-process coordination layer exists |
+| Published to crates.io as `spotter` | Blocked | `scripts/check-crates-io-release-ready.py` currently fails because crates.io already has `spotter` and `CRATES_IO_OWNER_LOGIN` is unset |
+| Prebuilt GitHub Release binaries for Linux x86_64, Linux aarch64, macOS x86_64, macOS aarch64, Windows x86_64 | Partially verified | `.github/workflows/release.yml` contains all five targets; release dry run `25960652474` built all five with `publish=false`; no tag-triggered GitHub Release exists yet |
+| CHANGELOG-led versioning | Done | `CHANGELOG.md` has a `0.1.0` entry; release workflow checks manifest version against the tag and changelog |
+| Global SQLite DB at XDG-style data dir with override | Done | `src/paths.rs`; CLI accepts `--db`; README documents `~/.local/share/spotter/spotter.db` |
+| Config file at XDG-style config dir with override | Done | `src/paths.rs`, `src/config.rs`; CLI accepts `--config`; README documents `~/.config/spotter/config.toml` |
+| Schema owned by this project with automatic migrations | Verified | `src/db.rs` runs migrations in `open`; `tests/golden/schema.sql` and `tests/schema_and_determinism.rs` verify schema and migrations |
+| Breaking migration snapshots to `spotter.db.bak.<version>` | Verified | `src/db.rs` `snapshot_database`; `tests/schema_and_determinism.rs` checks backup creation |
+| Tool calls derived only from Claude Code JSONL transcripts on disk | Verified | `src/db.rs` ingest derives runs from parsed JSONL; `scripts/check-local-only.py` prevents network/listener dependencies |
+| Transcript locations config-driven, with no implicit filesystem walks | Verified | `src/config.rs`, `src/cli.rs`; `tests/cli_path_overrides.rs` covers path/config behavior |
+| Project aliases for output and `--project` filters | Verified | `src/config.rs`; `spotter projects` tests and parity tests cover alias filtering |
+| `spotter init` first-run setup | Verified | `src/cli.rs`; `tests/cli_goldens.rs` covers init happy/empty/error outputs |
+| `spotter projects list/add/remove/alias` | Verified | `src/cli.rs`; golden tests cover all project commands |
+| Ported transcript command index and commands | Verified | `docs/subcommand-parity-checklist.md`; `tests/cli_surface.rs`; `tests/cli_*` integration tests |
+| Carried-over Elixir flags accepted with equivalent semantics | Verified | `docs/subcommand-parity-checklist.md`; `tests/cli_flag_parity.rs`; `scripts/check-parity-checklist.sh` |
+| `mix spotter.transcripts.slice.register` intentionally dropped | Done | `docs/subcommand-parity-checklist.md` documents the drop; no Rust command is exposed |
+| JSONL parser rejects unknown fields at all required levels | Verified | `serde(deny_unknown_fields)` in `src/jsonl.rs`; property and corpus tests in `src/jsonl.rs` and `tests/jsonl_corpus.rs` |
+| Richer tool-call context than Elixir `tool_call_run` | Verified | `src/db.rs` stores command components, fingerprints, sizes, file paths, source scope, and error content; covered by CLI search/flag tests |
+| Subagent transcripts are first-class and linked to parents | Verified | `src/db.rs` session/tool-run schema has parent and subagent fields; subagent fixture and tests cover sync/search/inspect output |
+| Search covers message content as well as tool calls | Verified | `messages_fts` path in `src/db.rs`; `--content-contains` in `src/cli.rs`; tests cover content search |
+| Code quality gates: fmt, clippy, tests, rustdoc, doctests, deny, machete, unsafe, no production unwrap, MSRV | Verified | `.github/workflows/ci.yml`; `scripts/check-ci-workflow.py`; current CI run `25960776232` is green on `2bfb507` |
+| PR best-practice checklist exists | Done | `.github/PULL_REQUEST_TEMPLATE.md` |
+| Release PR checklist signed off | Blocked | No release PR exists in this checkout |
+| Coverage thresholds 80 percent lines and 70 percent branches | Verified | CI `coverage` job in run `25960776232`; local audit recorded 89.42 percent lines and 75.60 percent branches |
+| Schema snapshot, migration round-trip, and deterministic sync | Verified | `tests/golden/schema.sql`; `tests/schema_and_determinism.rs` |
+| Performance targets and hot-path benchmarks | Verified | `.github/workflows/ci.yml` performance job; current CI run `25960776232` passed |
+| Golden CLI outputs with redaction and regen command | Verified | `tests/golden/**`, `tests/cli_goldens.rs`, `xtask`; CI checks `./xtask regen-golden` leaves no diff |
+| Release tag on `main` | Blocked | Local `v0.1.0` points at `main`; no remote tag exists |
+| GitHub Release assets and checksums attached | Blocked | No GitHub Release exists; assets require a tag-triggered publish run |
+| Published binary `spotter --version` matches tag | Blocked | Release workflow verifies runnable targets, but no published binaries exist yet |
+
 ## Local Evidence
 
 | GOAL item | Artifact or verifier |
