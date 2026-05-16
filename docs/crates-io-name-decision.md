@@ -15,6 +15,7 @@ That name is already occupied on crates.io by an unrelated package:
 | Latest crates.io version | `0.1.4` |
 | Latest GitHub release | `v0.1.4` |
 | Repository state | public, not archived, issues enabled |
+| Public issues | none returned by `gh issue list -R kohbis/spotter --state all --limit 20` on 2026-05-16 |
 
 This is a semantic package and binary conflict, not an empty-name reservation.
 The planned release version here is `0.1.5` so it is newer than the existing
@@ -54,7 +55,7 @@ This path preserves the literal `GOAL.md` install command.
 Suggested request text:
 
 ```text
-Hi Kohei,
+Hi,
 
 We are preparing to release an open-source Rust CLI named `spotter` for local
 Claude Code transcript analytics:
@@ -65,6 +66,15 @@ already has your unrelated AWS EC2 Spot Instance Advisor CLI under that package
 name. Would you be open to discussing a crates.io ownership transfer or another
 arrangement? We do not want to overwrite or confuse users of your existing CLI
 without your explicit agreement.
+```
+
+Suggested GitHub issue command, if the maintainer agrees this contact should be
+made publicly from an authorized account:
+
+```sh
+gh issue create -R kohbis/spotter \
+  --title "Question about the crates.io spotter package name" \
+  --body-file docs/crates-io-owner-request.md
 ```
 
 ### Rename The Crate
