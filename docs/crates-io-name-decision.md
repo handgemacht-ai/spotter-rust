@@ -93,7 +93,8 @@ explicit `GOAL.md` requirement.
 
 `scripts/check-crates-io-release-ready.py` fails if:
 
-- the package name exists and `CRATES_IO_OWNER_LOGIN` is unset,
+- the package name exists and `CRATES_IO_OWNER_LOGIN` is unset, reporting the
+  current owner logins,
 - the configured owner does not match a crates.io owner,
 - the package version already exists, or
 - the manifest version is not newer than the existing crates.io max version.

@@ -45,17 +45,18 @@ def main() -> int:
             return 1
 
     owners = fetch_json(f"{CRATES_IO_API_BASE}/crates/{name}/owners")["users"]
-    owner_logins = {owner.get("login") for owner in owners}
+    owner_logins = sorted(owner.get("login") for owner in owners if owner.get("login"))
     if not EXPECTED_OWNER:
         print(
-            f"crates.io package name already exists: {name}; set CRATES_IO_OWNER_LOGIN after ownership is ready",
+            f"crates.io package name already exists: {name}; "
+            f"current owners: {owner_logins}; set CRATES_IO_OWNER_LOGIN after ownership is ready",
             file=sys.stderr,
         )
         return 1
 
     if EXPECTED_OWNER not in owner_logins:
         print(
-            f"crates.io package {name} is owned by {sorted(owner_logins)}, not {EXPECTED_OWNER}",
+            f"crates.io package {name} is owned by {owner_logins}, not {EXPECTED_OWNER}",
             file=sys.stderr,
         )
         return 1
