@@ -15,6 +15,9 @@ REQUIRED_TARGETS = {
 
 REQUIRED_SNIPPETS = {
     "tag trigger": 'tags:\n      - "v*.*.*"',
+    "release preflight": "release-preflight:",
+    "release preflight dependency": "needs: release-preflight",
+    "crates.io token preflight": "CRATES_IO_TOKEN repository secret is required for release publishing",
     "main ancestry check": 'git merge-base --is-ancestor "$GITHUB_SHA" origin/main',
     "changelog check": 'grep -q "^## ${version}$" CHANGELOG.md',
     "flag parity test": "--test cli_flag_parity",
@@ -44,6 +47,14 @@ REQUIRED_SNIPPETS = {
     "crates publish": 'cargo publish --locked --token "$CRATES_IO_TOKEN"',
 }
 
+ORDERED_SNIPPETS = [
+    (
+        'cargo publish --locked --token "$CRATES_IO_TOKEN"',
+        "softprops/action-gh-release@v2",
+        "crates.io publish must happen before GitHub Release creation",
+    ),
+]
+
 
 def main() -> int:
     text = WORKFLOW.read_text()
@@ -55,6 +66,10 @@ def main() -> int:
 
     for label, snippet in REQUIRED_SNIPPETS.items():
         if snippet not in text:
+            missing.append(label)
+
+    for before, after, label in ORDERED_SNIPPETS:
+        if before in text and after in text and text.index(before) > text.index(after):
             missing.append(label)
 
     if missing:

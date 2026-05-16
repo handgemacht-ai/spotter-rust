@@ -6,7 +6,21 @@ on:
       - "v*.*.*"
 
 jobs:
+  release-preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check crates.io token configured
+        shell: bash
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          if [[ -z "$CRATES_IO_TOKEN" ]]; then
+            echo "CRATES_IO_TOKEN repository secret is required for release publishing" >&2
+            exit 1
+          fi
+
   verify:
+    needs: release-preflight
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -130,12 +144,12 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.75.0
       - run: cargo publish --locked --token "$CRATES_IO_TOKEN"
         env:
           CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

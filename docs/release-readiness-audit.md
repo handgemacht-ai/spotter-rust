@@ -34,7 +34,7 @@ verify it against `GOAL.md`.
 | Sync determinism | `syncing_same_jsonl_twice_is_deterministic` in `tests/schema_and_determinism.rs` |
 | Golden CLI outputs | `tests/golden/**`, `tests/cli_goldens.rs`, `./xtask regen-golden` |
 | Code quality gates | `.github/workflows/ci.yml`, `scripts/check-ci-workflow.py` |
-| Release workflow coverage | `.github/workflows/release.yml`, `scripts/check-release-workflow.py` |
+| Release workflow coverage | `.github/workflows/release.yml`, `scripts/check-release-workflow.py`; release tags fail fast if `CRATES_IO_TOKEN` is missing |
 | Coverage thresholds | fresh `cargo llvm-cov`: 89.42% lines, 75.60% branches |
 | Packaging and install path | `cargo package --allow-dirty --locked`, `cargo publish --dry-run --allow-dirty --locked`, `cargo install --path . --locked` |
 | Public git history | Public `main` is pushed to `https://github.com/handgemacht-ai/spotter-rust` |
@@ -98,7 +98,7 @@ These GOAL requirements still need external release work:
 | Tagged on `main` | Local `v0.1.0` tag points at `main`; it has not been pushed to `origin` |
 | GitHub release matrix produced all five binaries | Release workflow exists but has not run from a remote tag |
 | GitHub Release assets and checksums attached | Not done; requires pushing the release tag |
-| Published to crates.io | Blocked: `CRATES_IO_TOKEN` is not configured, and `cargo search spotter` shows the `spotter` crate name is already occupied by another package |
+| Published to crates.io | Blocked: `CRATES_IO_TOKEN` is not configured, and `cargo search spotter` shows the `spotter` crate name is already occupied by another package; tag pushes fail in preflight until the secret exists |
 | Published binary `spotter --version` matches tag | Local binary reports `spotter 0.1.0`; published binaries do not exist yet |
 
 ## Handoff Steps
