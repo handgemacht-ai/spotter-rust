@@ -15,7 +15,7 @@ The final completion gates are intentionally still failing:
 
 ```sh
 scripts/check-crates-io-release-ready.py
-# crates.io package name already exists: spotter; set CRATES_IO_OWNER_LOGIN after ownership is ready
+# crates.io package name already exists: spotter; current owners: ['kohbis']; set CRATES_IO_OWNER_LOGIN after ownership is ready
 
 scripts/check-release-complete.py
 # missing fetched release tag: v0.1.5

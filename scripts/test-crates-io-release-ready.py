@@ -34,7 +34,7 @@ def main() -> int:
         },
         {},
         1,
-        "set CRATES_IO_OWNER_LOGIN",
+        "current owners: ['kohbis']; set CRATES_IO_OWNER_LOGIN",
     )
     run_case(
         "wrong owner",
