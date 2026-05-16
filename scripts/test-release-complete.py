@@ -40,6 +40,13 @@ def main() -> int:
         "crates.io does not have spotter 0.1.5",
     )
     run_case(
+        "missing release PR signoff",
+        {"/crates/spotter/0.1.5": (200, {"version": {"num": "0.1.5"}})},
+        {"FAKE_GH_MISSING_SIGNOFF": "1"},
+        1,
+        "no merged PR associated",
+    )
+    run_case(
         "missing release asset",
         {"/crates/spotter/0.1.5": (200, {"version": {"num": "0.1.5"}})},
         {"FAKE_GH_MISSING_ASSET": "1"},
@@ -193,6 +200,27 @@ def write_fake_commands(bin_dir: Path) -> None:
             out_dir.mkdir(parents=True, exist_ok=True)
             namespace = runpy.run_path(str(root / "scripts" / "test-github-release-assets.py"))
             namespace["write_release_assets"](out_dir)
+            raise SystemExit(0)
+
+        if args[:1] == ["api"]:
+            if os.environ.get("FAKE_GH_MISSING_SIGNOFF"):
+                print("[]")
+                raise SystemExit(0)
+            template = root / ".github" / "PULL_REQUEST_TEMPLATE.md"
+            checklist = []
+            for line in template.read_text(encoding="utf-8").splitlines():
+                if line.startswith("- [ ] "):
+                    checklist.append("- [x] " + line.removeprefix("- [ ] "))
+            print(json.dumps([
+                {
+                    "number": 42,
+                    "title": "Release v0.1.5",
+                    "body": "Release v0.1.5\\n\\n" + "\\n".join(checklist),
+                    "state": "closed",
+                    "merged_at": "2026-05-16T12:00:00Z",
+                    "base": {"ref": "main"},
+                }
+            ]))
             raise SystemExit(0)
 
         print(f"unexpected fake gh args: {args}", file=sys.stderr)

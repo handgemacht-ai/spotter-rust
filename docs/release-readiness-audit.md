@@ -99,7 +99,7 @@ not satisfied by local implementation alone.
 | Current CI evidence | Tracked in issue #1 after each release-candidate commit |
 | Current release dry-run evidence | Tracked in issue #1 after each release-candidate commit |
 | Dry-run artifact verification | `scripts/check-github-release-assets.py <download-dir> --expect-version 0.1.5 --require-runnable-host` verifies the downloaded workflow artifacts |
-| Final release completion verifier | `scripts/check-release-complete.py` verifies tag ancestry, CHANGELOG, crates.io version, GitHub Release metadata/assets, asset checksums, and `cargo install spotter --version <version>` |
+| Final release completion verifier | `scripts/check-release-complete.py` verifies tag ancestry, release PR signoff, CHANGELOG, crates.io version, GitHub Release metadata/assets, asset checksums, and `cargo install spotter --version <version>` |
 
 ## Verified Commands
 
@@ -128,6 +128,8 @@ git diff --exit-code -- tests/fixtures/transcripts
 scripts/check-fixtures-scrubbed.py
 scripts/test-crates-io-release-ready.py
 scripts/test-release-pr-signoff.py
+scripts/test-github-release-assets.py
+scripts/test-release-complete.py
 cargo package --allow-dirty --locked
 cargo publish --dry-run --allow-dirty --locked
 cargo install --path . --locked --root target/install-smoke

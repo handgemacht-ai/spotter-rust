@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "Cargo.toml"
 CHANGELOG = ROOT / "CHANGELOG.md"
 ASSET_CHECK = ROOT / "scripts" / "check-github-release-assets.py"
+SIGNOFF_CHECK = ROOT / "scripts" / "check-release-pr-signoff.py"
 DEFAULT_REPO = "handgemacht-ai/spotter-rust"
 CRATES_IO_API_BASE = os.environ.get("CRATES_IO_API_BASE", "https://crates.io/api/v1")
 USER_AGENT = "spotter-rust-release-check (https://github.com/handgemacht-ai/spotter-rust)"
@@ -56,7 +57,8 @@ def main() -> int:
     tag = f"v{version}"
 
     require_changelog_entry(version)
-    verify_git_tag_on_main(tag)
+    tag_commit = verify_git_tag_on_main(tag)
+    verify_release_pr_signoff(args.repo, tag_commit, version)
     verify_crates_io_version(name, version)
     verify_github_release(
         args.repo,
@@ -70,7 +72,7 @@ def main() -> int:
         verify_cargo_install(name, version, args.install_root)
 
     print(
-        f"Release {tag} is complete: crates.io, git tag, GitHub Release assets, and cargo install verified"
+        f"Release {tag} is complete: release PR signoff, crates.io, git tag, GitHub Release assets, and cargo install verified"
     )
     return 0
 
@@ -81,7 +83,7 @@ def require_changelog_entry(version: str) -> None:
         abort(f"CHANGELOG.md is missing release heading: {heading}")
 
 
-def verify_git_tag_on_main(tag: str) -> None:
+def verify_git_tag_on_main(tag: str) -> str:
     run(["git", "fetch", "origin", "main", "--tags"])
     head = run(["git", "rev-parse", "HEAD"])
     origin_main = run(["git", "rev-parse", "origin/main"])
@@ -94,6 +96,22 @@ def verify_git_tag_on_main(tag: str) -> None:
     ancestor = run_result(["git", "merge-base", "--is-ancestor", tag, "origin/main"])
     if ancestor.returncode != 0:
         abort(f"release tag {tag} is not on origin/main {origin_main}")
+    return tag_commit
+
+
+def verify_release_pr_signoff(repo: str, commit: str, version: str) -> None:
+    run(
+        [
+            sys.executable,
+            str(SIGNOFF_CHECK),
+            "--repo",
+            repo,
+            "--commit",
+            commit,
+            "--version",
+            version,
+        ]
+    )
 
 
 def verify_crates_io_version(name: str, version: str) -> None:
