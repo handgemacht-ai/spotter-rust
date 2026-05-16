@@ -24,6 +24,27 @@ Use this runbook after the implementation audit in
   - `CRATES_IO_OWNER_LOGIN` as a repository variable matching a crates.io
     owner login when publishing an existing crate name.
 
+Configure those release settings from an authorized maintainer account only
+after the crates.io ownership/name decision is resolved:
+
+```sh
+read -rsp "crates.io token: " CRATES_IO_TOKEN
+echo
+gh secret set CRATES_IO_TOKEN \
+  -R handgemacht-ai/spotter-rust \
+  --body "$CRATES_IO_TOKEN"
+unset CRATES_IO_TOKEN
+
+gh variable set CRATES_IO_OWNER_LOGIN \
+  -R handgemacht-ai/spotter-rust \
+  --body "<crates-io-owner-login>"
+```
+
+`CRATES_IO_OWNER_LOGIN` must be a login returned by the crates.io owners API for
+the manifest package name. For the current `spotter` package-name path, that
+means this variable should remain unset until the owner-transfer or sharing
+decision is complete.
+
 ## Preflight
 
 Run these from a clean checkout of `main`:
