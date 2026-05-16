@@ -21,6 +21,21 @@ The current manifest version here is `0.1.0`, so even an ownership transfer
 would not make `cargo install spotter` install this CLI unless the release
 version is bumped above the existing `0.1.4`.
 
+## crates.io Policy Constraints
+
+The Cargo Book documents the relevant crates.io constraints:
+
+- crate names are first-come-first-serve; once a crate name is taken, it cannot
+  be used for another crate,
+- publishing a version is permanent; that version cannot be overwritten and the
+  code cannot be deleted, and
+- owners can publish new versions and manage ownership.
+
+Primary references:
+
+- `https://doc.rust-lang.org/cargo/reference/publishing.html`
+- `https://doc.rust-lang.org/cargo/commands/cargo-owner.html`
+
 ## Valid Paths
 
 ### Keep The `spotter` Name
