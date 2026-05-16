@@ -21,6 +21,7 @@ REQUIRED_SNIPPETS = {
     "conditional release preflight": "if: github.event_name == 'push' || inputs.publish",
     "release preflight dependency": "needs: release-preflight",
     "skipped preflight allowed for dry run": "needs.release-preflight.result == 'skipped'",
+    "dry run build after skipped preflight": "needs.verify.result == 'success'",
     "manual publish tag guard": "Manual publishing must run from a tag ref",
     "crates.io token preflight": "CRATES_IO_TOKEN repository secret is required for release publishing",
     "crates.io package preflight": "scripts/check-crates-io-release-ready.py",

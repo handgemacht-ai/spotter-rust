@@ -84,6 +84,7 @@ jobs:
 
   build:
     needs: verify
+    if: always() && needs.verify.result == 'success'
     strategy:
       matrix:
         include:
