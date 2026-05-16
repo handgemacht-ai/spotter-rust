@@ -8,7 +8,8 @@ Use this runbook after the implementation audit in
 - The release commit is on `origin/main`.
 - `CHANGELOG.md` has an entry matching the package version in `Cargo.toml`.
 - The Rust best-practice checklist in `.github/PULL_REQUEST_TEMPLATE.md` is
-  signed off for the release.
+  signed off on a merged release PR associated with the release commit. The PR
+  title or body must mention the release version, for example `v0.1.5`.
 - The crates.io package decision in `docs/crates-io-name-decision.md` is
   resolved:
   - either `spotter` is owned by the release account or team, or
@@ -33,6 +34,7 @@ git pull --ff-only origin main
 git status --short --branch
 
 scripts/check-crates-io-release-ready.py
+scripts/check-release-pr-signoff.py
 cargo package --locked
 
 gh workflow run release.yml \

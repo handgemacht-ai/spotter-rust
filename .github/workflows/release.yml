@@ -16,8 +16,15 @@ jobs:
   release-preflight:
     if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v6
+      - name: Check release PR signoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/check-release-pr-signoff.py --repo "${{ github.repository }}" --commit "${{ github.sha }}"
       - name: Check publish ref
         shell: bash
         run: |
@@ -64,6 +71,7 @@ jobs:
       - run: scripts/check-release-workflow.py
       - run: scripts/check-ci-workflow.py
       - run: scripts/test-crates-io-release-ready.py
+      - run: scripts/test-release-pr-signoff.py
       - run: scripts/test-github-release-assets.py
       - run: scripts/test-release-complete.py
       - run: cargo rustdoc --lib --locked -- -D missing_docs

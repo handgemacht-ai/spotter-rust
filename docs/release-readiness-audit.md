@@ -58,7 +58,7 @@ not satisfied by local implementation alone.
 | Search covers message content as well as tool calls | Verified | `messages_fts` path in `src/db.rs`; `--content-contains` in `src/cli.rs`; tests cover content search |
 | Code quality gates: fmt, clippy, tests, rustdoc, doctests, deny, machete, unsafe, no production unwrap, MSRV | Verified | `.github/workflows/ci.yml`; `scripts/check-ci-workflow.py`; current release-candidate CI evidence is tracked in issue #1 |
 | PR best-practice checklist exists | Done | `.github/PULL_REQUEST_TEMPLATE.md` |
-| Release PR checklist signed off | Blocked | No release PR exists in this checkout |
+| Release PR checklist signed off | Blocked | No release PR exists in this checkout; `.github/workflows/release.yml` runs `scripts/check-release-pr-signoff.py` during publish preflight |
 | Coverage thresholds 80 percent lines and 70 percent branches | Verified | CI `coverage` job runs `scripts/check-coverage-json.py target/llvm-cov.json --lines 80 --branches 70`; local audit recorded 89.42 percent lines and 75.60 percent branches |
 | Schema snapshot, migration round-trip, and deterministic sync | Verified | `tests/golden/schema.sql`; `tests/schema_and_determinism.rs` |
 | Performance targets and hot-path benchmarks | Verified | `.github/workflows/ci.yml` performance job enforces the absolute targets and hot-path benchmark coverage; current release-candidate CI evidence is tracked in issue #1 |
@@ -91,7 +91,7 @@ not satisfied by local implementation alone.
 | Sync determinism | `syncing_same_jsonl_twice_is_deterministic` in `tests/schema_and_determinism.rs` |
 | Golden CLI outputs | `tests/golden/**`, `tests/cli_goldens.rs`, `./xtask regen-golden` |
 | Code quality gates | `.github/workflows/ci.yml`, `scripts/check-ci-workflow.py` |
-| Release workflow coverage | `.github/workflows/release.yml`, `scripts/check-release-workflow.py`; release tags fail fast if `CRATES_IO_TOKEN` is missing or the manifest package/version is not publishable on crates.io; `workflow_dispatch` can dry-run verify/build without publishing; workflow actions are pinned to Node 24-compatible majors |
+| Release workflow coverage | `.github/workflows/release.yml`, `scripts/check-release-workflow.py`; release tags fail fast if the release PR signoff is missing, `CRATES_IO_TOKEN` is missing, or the manifest package/version is not publishable on crates.io; `workflow_dispatch` can dry-run verify/build without publishing; workflow actions are pinned to Node 24-compatible majors |
 | Coverage thresholds | fresh `cargo llvm-cov`: 89.42% lines, 75.60% branches |
 | Packaging and install path | `cargo package --allow-dirty --locked`, `cargo publish --dry-run --allow-dirty --locked`, `cargo install --path . --locked` |
 | Release dry run | GitHub Actions Release `publish=false` dry runs verify, build all five target artifacts/checksums, and skip publish; current run evidence is tracked in issue #1 |
@@ -127,6 +127,7 @@ scripts/make-test-fixtures.py
 git diff --exit-code -- tests/fixtures/transcripts
 scripts/check-fixtures-scrubbed.py
 scripts/test-crates-io-release-ready.py
+scripts/test-release-pr-signoff.py
 cargo package --allow-dirty --locked
 cargo publish --dry-run --allow-dirty --locked
 cargo install --path . --locked --root target/install-smoke
