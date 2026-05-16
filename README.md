@@ -30,6 +30,17 @@ spotter transcripts sequences --recovery
 All parsing and storage is local. There is no telemetry, no HTTP listener, and
 no auto-update check.
 
+## Current Release Status
+
+`spotter` is not currently published to crates.io and there is no GitHub Release
+tag for `0.1.5`. Until that decision changes, install or run it from this
+source checkout:
+
+```sh
+cargo install --path . --locked
+cargo run --locked -- --help
+```
+
 ## Verification
 
 ```sh
