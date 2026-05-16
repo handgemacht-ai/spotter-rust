@@ -68,12 +68,11 @@ tag="v${version}"
 
 gh run list -R handgemacht-ai/spotter-rust --workflow Release --limit 5
 gh release view "$tag" -R handgemacht-ai/spotter-rust --json tagName,assets
-cargo install spotter --version "$version" --locked
-spotter --version
+scripts/check-release-complete.py
 ```
 
-Then download the release assets and verify each checksum file against its
-binary:
+For asset-only debugging, download the release assets and verify each checksum
+file against its binary:
 
 ```sh
 rm -rf target/release-verify
