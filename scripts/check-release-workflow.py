@@ -47,6 +47,7 @@ REQUIRED_SNIPPETS = {
     "package check": "cargo package --locked",
     "repro build a": "CARGO_TARGET_DIR=target/repro-a cargo build --release --locked --target ${{ matrix.target }}",
     "repro build b": "CARGO_TARGET_DIR=target/repro-b cargo build --release --locked --target ${{ matrix.target }}",
+    "windows reproducible linker": 'export RUSTFLAGS="-C link-arg=/Brepro"',
     "binary comparison": 'cmp "target/repro-a/${{ matrix.target }}/release/$bin" "target/repro-b/${{ matrix.target }}/release/$bin"',
     "version match": 'test "$output" = "spotter $version"',
     "linux/mac checksum": "shasum -a 256 dist/spotter-${{ matrix.target }} > dist/spotter-${{ matrix.target }}.sha256",
