@@ -74,3 +74,15 @@ fn transcript_help_index_lists_supported_transcript_commands() {
 
     assert!(!stdout.contains("slice.register"));
 }
+
+#[test]
+fn dropped_slice_register_command_is_rejected() {
+    Command::cargo_bin("spotter")
+        .expect("binary")
+        .args(["transcripts", "slice.register"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unrecognized subcommand 'slice.register'",
+        ));
+}
