@@ -14,6 +14,10 @@ Use this runbook after the implementation audit in
   - either `spotter` is owned by the release account or team, or
   - `Cargo.toml` has been intentionally renamed and the CHANGELOG/README
     install instructions have been updated.
+  If keeping the `spotter` package name, use
+  `docs/crates-io-owner-request.md` as the maintainer-approved public contact
+  body; do not open a third-party issue from an account that is not authorized
+  to represent the release decision.
 - The GitHub repository has:
   - `CRATES_IO_TOKEN` as a repository secret,
   - `CRATES_IO_OWNER_LOGIN` as a repository variable matching a crates.io
