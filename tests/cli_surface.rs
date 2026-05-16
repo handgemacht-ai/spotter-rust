@@ -42,3 +42,35 @@ fn transcript_help_index_runs_without_arguments() {
         .success()
         .stdout(predicate::str::contains("Spotter Transcript Analytics CLI"));
 }
+
+#[test]
+fn transcript_help_index_lists_supported_transcript_commands() {
+    let output = Command::cargo_bin("spotter")
+        .expect("binary")
+        .args(["transcripts"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).expect("utf8 stdout");
+
+    for command in [
+        "spotter transcripts sync",
+        "spotter transcripts search",
+        "spotter transcripts inspect",
+        "spotter transcripts compare",
+        "spotter transcripts aggregate",
+        "spotter transcripts audit",
+        "spotter transcripts errors",
+        "spotter transcripts health",
+        "spotter transcripts sequences",
+    ] {
+        assert!(
+            stdout.contains(command),
+            "missing help-index command: {command}"
+        );
+    }
+
+    assert!(!stdout.contains("slice.register"));
+}
