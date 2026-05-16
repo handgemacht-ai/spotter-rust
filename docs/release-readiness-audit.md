@@ -17,6 +17,10 @@ The final completion gates are intentionally still failing:
 scripts/check-crates-io-release-ready.py
 # crates.io package name already exists: spotter; current owners: ['kohbis']; set CRATES_IO_OWNER_LOGIN after ownership is ready
 
+scripts/check-github-release-config.py --repo handgemacht-ai/spotter-rust
+# missing repository secret: CRATES_IO_TOKEN
+# missing repository variable: CRATES_IO_OWNER_LOGIN
+
 scripts/check-release-complete.py
 # missing fetched release tag: v0.1.5
 ```
@@ -94,6 +98,7 @@ not satisfied by local implementation alone.
 | Golden CLI outputs | `tests/golden/**`, `tests/cli_goldens.rs`, `./xtask regen-golden` |
 | Code quality gates | `.github/workflows/ci.yml`, `scripts/check-ci-workflow.py` |
 | Release workflow coverage | `.github/workflows/release.yml`, `scripts/check-release-workflow.py`; release tags fail fast if the release PR signoff is missing, `CRATES_IO_TOKEN` is missing, or the manifest package/version is not publishable on crates.io; `workflow_dispatch` can dry-run verify/build without publishing; workflow actions are pinned to Node 24-compatible majors |
+| GitHub release config preflight | `scripts/check-github-release-config.py --repo handgemacht-ai/spotter-rust` verifies the `CRATES_IO_TOKEN` repository secret name and `CRATES_IO_OWNER_LOGIN` repository variable before tagging |
 | Coverage thresholds | fresh `cargo llvm-cov`: 89.42% lines, 75.60% branches |
 | Packaging and install path | `cargo package --allow-dirty --locked`, `cargo publish --dry-run --allow-dirty --locked`, `cargo install --path . --locked` |
 | Release dry run | GitHub Actions Release `publish=false` dry runs verify, build all five target artifacts/checksums, and skip publish; current run evidence is tracked in issue #1 |
@@ -129,6 +134,7 @@ scripts/make-test-fixtures.py
 git diff --exit-code -- tests/fixtures/transcripts
 scripts/check-fixtures-scrubbed.py
 scripts/test-crates-io-release-ready.py
+scripts/test-github-release-config.py
 scripts/test-release-pr-signoff.py
 scripts/test-github-release-assets.py
 scripts/test-release-complete.py
