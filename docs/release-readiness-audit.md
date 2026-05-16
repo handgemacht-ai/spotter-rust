@@ -98,7 +98,7 @@ These GOAL requirements still need external release work:
 | Tagged on `main` | Local `v0.1.0` tag points at `main`; it has not been pushed to `origin` |
 | GitHub release matrix produced all five binaries | Release workflow exists but has not run from a remote tag |
 | GitHub Release assets and checksums attached | Not done; requires pushing the release tag |
-| Published to crates.io | Blocked: `CRATES_IO_TOKEN` is not configured, and `cargo search spotter` shows the `spotter` crate name is already occupied by another package; tag pushes fail in preflight until the secret exists |
+| Published to crates.io | Blocked by [issue #1](https://github.com/handgemacht-ai/spotter-rust/issues/1): `CRATES_IO_TOKEN` is not configured, and `cargo search spotter` shows the `spotter` crate name is already occupied by another package; tag pushes fail in preflight until the secret exists |
 | Published binary `spotter --version` matches tag | Local binary reports `spotter 0.1.0`; published binaries do not exist yet |
 
 ## Handoff Steps
