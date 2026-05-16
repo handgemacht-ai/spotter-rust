@@ -7,6 +7,7 @@ WORKFLOW = Path(".github/workflows/ci.yml")
 
 REQUIRED_SNIPPETS = {
     "main branch push": "branches: [main]",
+    "Node 24 checkout action": "actions/checkout@v6",
     "MSRV toolchain": "toolchain: 1.75.0",
     "format": "cargo fmt --check",
     "check": "cargo check --all-targets --all-features --locked",
@@ -43,12 +44,19 @@ REQUIRED_SNIPPETS = {
     "rss perf": "scripts/check-rss.py --max-kb 102400",
 }
 
+BLOCKED_SNIPPETS = {
+    "outdated checkout action": "actions/checkout@v4",
+}
+
 
 def main() -> int:
     text = WORKFLOW.read_text()
     missing = [
         label for label, snippet in REQUIRED_SNIPPETS.items() if snippet not in text
     ]
+    missing.extend(
+        label for label, snippet in BLOCKED_SNIPPETS.items() if snippet in text
+    )
     if missing:
         for label in missing:
             print(f"missing CI workflow requirement: {label}", file=sys.stderr)
