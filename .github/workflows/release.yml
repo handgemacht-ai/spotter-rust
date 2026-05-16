@@ -1,15 +1,30 @@
 name: Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish crates.io package and GitHub Release"
+        required: true
+        type: boolean
+        default: false
   push:
     tags:
       - "v*.*.*"
 
 jobs:
   release-preflight:
+    if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check publish ref
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.ref_type }}" != "tag" ]]; then
+            echo "Manual publishing must run from a tag ref" >&2
+            exit 1
+          fi
       - name: Check crates.io token configured
         shell: bash
         env:
@@ -26,6 +41,7 @@ jobs:
 
   verify:
     needs: release-preflight
+    if: always() && (needs.release-preflight.result == 'success' || needs.release-preflight.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,10 +71,14 @@ jobs:
       - name: Check release tag metadata
         shell: bash
         run: |
-          version="${GITHUB_REF_NAME#v}"
           manifest_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
-          test "$manifest_version" = "$version"
-          grep -q "^## ${version}$" CHANGELOG.md
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            test "$manifest_version" = "$version"
+          else
+            version="$manifest_version"
+          fi
+          grep -q "^## ${manifest_version}$" CHANGELOG.md
           git fetch origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
@@ -116,7 +136,7 @@ jobs:
         shell: bash
         if: matrix.can_run
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
             output="$(target/repro-a/${{ matrix.target }}/release/spotter.exe --version)"
           else
@@ -141,6 +161,7 @@ jobs:
 
   publish:
     needs: build
+    if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
     permissions:
       contents: write

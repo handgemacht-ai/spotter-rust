@@ -34,7 +34,7 @@ verify it against `GOAL.md`.
 | Sync determinism | `syncing_same_jsonl_twice_is_deterministic` in `tests/schema_and_determinism.rs` |
 | Golden CLI outputs | `tests/golden/**`, `tests/cli_goldens.rs`, `./xtask regen-golden` |
 | Code quality gates | `.github/workflows/ci.yml`, `scripts/check-ci-workflow.py` |
-| Release workflow coverage | `.github/workflows/release.yml`, `scripts/check-release-workflow.py`; release tags fail fast if `CRATES_IO_TOKEN` is missing or the manifest package/version is not publishable on crates.io |
+| Release workflow coverage | `.github/workflows/release.yml`, `scripts/check-release-workflow.py`; release tags fail fast if `CRATES_IO_TOKEN` is missing or the manifest package/version is not publishable on crates.io; `workflow_dispatch` can dry-run verify/build without publishing |
 | Coverage thresholds | fresh `cargo llvm-cov`: 89.42% lines, 75.60% branches |
 | Packaging and install path | `cargo package --allow-dirty --locked`, `cargo publish --dry-run --allow-dirty --locked`, `cargo install --path . --locked` |
 | Public git history | Public `main` is pushed to `https://github.com/handgemacht-ai/spotter-rust` |
@@ -107,6 +107,7 @@ These GOAL requirements still need external release work:
 1. Resolve the crates.io package-name/ownership decision for `spotter`.
 2. Configure the repository `CRATES_IO_TOKEN` secret and `CRATES_IO_OWNER_LOGIN` variable when publish ownership is ready.
 3. Open or otherwise complete the release checklist in `.github/PULL_REQUEST_TEMPLATE.md`.
-4. Push the `v0.1.0` tag on `main`.
-5. Let `.github/workflows/release.yml` build and publish artifacts.
-6. Verify GitHub Release assets/checksums and crates.io package availability.
+4. Run a manual release dry run with `gh workflow run release.yml --ref main -f publish=false`.
+5. Push the `v0.1.0` tag on `main`.
+6. Let `.github/workflows/release.yml` build and publish artifacts.
+7. Verify GitHub Release assets/checksums and crates.io package availability.

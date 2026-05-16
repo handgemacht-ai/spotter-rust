@@ -15,12 +15,17 @@ REQUIRED_TARGETS = {
 
 REQUIRED_SNIPPETS = {
     "tag trigger": 'tags:\n      - "v*.*.*"',
+    "manual dry run trigger": "workflow_dispatch:",
+    "manual publish input": "publish:",
     "release preflight": "release-preflight:",
+    "conditional release preflight": "if: github.event_name == 'push' || inputs.publish",
     "release preflight dependency": "needs: release-preflight",
+    "skipped preflight allowed for dry run": "needs.release-preflight.result == 'skipped'",
+    "manual publish tag guard": "Manual publishing must run from a tag ref",
     "crates.io token preflight": "CRATES_IO_TOKEN repository secret is required for release publishing",
     "crates.io package preflight": "scripts/check-crates-io-release-ready.py",
     "main ancestry check": 'git merge-base --is-ancestor "$GITHUB_SHA" origin/main',
-    "changelog check": 'grep -q "^## ${version}$" CHANGELOG.md',
+    "changelog check": 'grep -q "^## ${manifest_version}$" CHANGELOG.md',
     "flag parity test": "--test cli_flag_parity",
     "path override test": "--test cli_path_overrides",
     "golden regen": "./xtask regen-golden",
@@ -47,6 +52,7 @@ REQUIRED_SNIPPETS = {
     "windows checksum": "sha256sum dist/spotter-${{ matrix.target }}.exe > dist/spotter-${{ matrix.target }}.sha256",
     "github release": "softprops/action-gh-release@v2",
     "crates publish": 'cargo publish --locked --token "$CRATES_IO_TOKEN"',
+    "conditional publish": "if: github.event_name == 'push' || inputs.publish",
 }
 
 ORDERED_SNIPPETS = [
