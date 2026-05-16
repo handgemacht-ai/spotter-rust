@@ -65,8 +65,8 @@ scripts/test-github-release-config.py
 scripts/test-release-pr-signoff.py
 scripts/test-github-release-assets.py
 scripts/test-release-complete.py
-cargo package --allow-dirty --locked
-cargo publish --dry-run --allow-dirty --locked
+cargo package --locked
+cargo publish --dry-run --locked
 scripts/check-install-smoke.sh
 ```
 
