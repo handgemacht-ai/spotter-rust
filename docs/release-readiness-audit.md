@@ -2,7 +2,7 @@
 
 Status as of 2026-05-16: local implementation and local verification are ready;
 external release state is not complete because there is no release PR, no
-pushed release tag, no GitHub Release artifacts, and no crates.io publish.
+release tag, no GitHub Release artifacts, and no crates.io publish.
 
 ## Objective
 
@@ -23,7 +23,7 @@ not satisfied by local implementation alone.
 | No Phoenix app dependency, HTTP listener, hook ingestion, telemetry, phone-home, or auto-update | Verified | `scripts/check-local-only.py` is run by CI and release workflows; `README.md` documents local-only behavior |
 | Single-user local operation with SQLite default locking | Done | `rusqlite` is used directly; no server or multi-process coordination layer exists |
 | Published to crates.io as `spotter` | Blocked | `scripts/check-crates-io-release-ready.py` currently fails because crates.io already has `spotter` owned by `kohbis`; the manifest is now `0.1.5`, newer than the unrelated AWS EC2 Spot Instance Advisor CLI `0.1.4`, but the package-name decision in `docs/crates-io-name-decision.md` must still be resolved |
-| Prebuilt GitHub Release binaries for Linux x86_64, Linux aarch64, macOS x86_64, macOS aarch64, Windows x86_64 | Partially verified | `.github/workflows/release.yml` contains all five targets; release dry run `25961923010` built all five with `publish=false` on `d8579d9`; no tag-triggered GitHub Release exists yet |
+| Prebuilt GitHub Release binaries for Linux x86_64, Linux aarch64, macOS x86_64, macOS aarch64, Windows x86_64 | Partially verified | `.github/workflows/release.yml` contains all five targets; release dry run `25962235973` built all five with `publish=false` on `bfbbad6`; no tag-triggered GitHub Release exists yet |
 | CHANGELOG-led versioning | Done | `CHANGELOG.md` has a `0.1.5` entry; release workflow checks manifest version against the tag and changelog |
 | Global SQLite DB at XDG-style data dir with override | Done | `src/paths.rs`; CLI accepts `--db`; README documents `~/.local/share/spotter/spotter.db` |
 | Config file at XDG-style config dir with override | Done | `src/paths.rs`, `src/config.rs`; CLI accepts `--config`; README documents `~/.config/spotter/config.toml` |
@@ -41,14 +41,14 @@ not satisfied by local implementation alone.
 | Richer tool-call context than Elixir `tool_call_run` | Verified | `src/db.rs` stores command components, fingerprints, sizes, file paths, source scope, and error content; covered by CLI search/flag tests |
 | Subagent transcripts are first-class and linked to parents | Verified | `src/db.rs` session/tool-run schema has parent and subagent fields; subagent fixture and tests cover sync/search/inspect output |
 | Search covers message content as well as tool calls | Verified | `messages_fts` path in `src/db.rs`; `--content-contains` in `src/cli.rs`; tests cover content search |
-| Code quality gates: fmt, clippy, tests, rustdoc, doctests, deny, machete, unsafe, no production unwrap, MSRV | Verified | `.github/workflows/ci.yml`; `scripts/check-ci-workflow.py`; CI run `25961863351` is green on `d8579d9`; this audit refresh is docs-only |
+| Code quality gates: fmt, clippy, tests, rustdoc, doctests, deny, machete, unsafe, no production unwrap, MSRV | Verified | `.github/workflows/ci.yml`; `scripts/check-ci-workflow.py`; CI run `25962204792` is green on `bfbbad6`; this audit refresh is docs-only |
 | PR best-practice checklist exists | Done | `.github/PULL_REQUEST_TEMPLATE.md` |
 | Release PR checklist signed off | Blocked | No release PR exists in this checkout |
-| Coverage thresholds 80 percent lines and 70 percent branches | Verified | CI `coverage` job in run `25961863351`; local audit recorded 89.42 percent lines and 75.60 percent branches |
+| Coverage thresholds 80 percent lines and 70 percent branches | Verified | CI `coverage` job in run `25962204792`; local audit recorded 89.42 percent lines and 75.60 percent branches |
 | Schema snapshot, migration round-trip, and deterministic sync | Verified | `tests/golden/schema.sql`; `tests/schema_and_determinism.rs` |
-| Performance targets and hot-path benchmarks | Verified | `.github/workflows/ci.yml` performance job; CI run `25961863351` passed on `d8579d9`; this audit refresh is docs-only |
+| Performance targets and hot-path benchmarks | Verified | `.github/workflows/ci.yml` performance job; CI run `25962204792` passed on `bfbbad6`; this audit refresh is docs-only |
 | Golden CLI outputs with redaction and regen command | Verified | `tests/golden/**`, `tests/cli_goldens.rs`, `xtask`; CI checks `./xtask regen-golden` leaves no diff |
-| Release tag on `main` | Blocked | Local `v0.1.5` points at `d8579d9`, which is on `main`; no remote tag exists |
+| Release tag on `main` | Blocked | No local or remote `v0.1.5` tag exists; create it on `main` only after release preflight passes |
 | GitHub Release assets and checksums attached | Blocked | No GitHub Release exists; assets require a tag-triggered publish run |
 | Published binary `spotter --version` matches tag | Blocked | Release workflow verifies runnable targets, but no published binaries exist yet |
 
@@ -76,10 +76,10 @@ not satisfied by local implementation alone.
 | Sync determinism | `syncing_same_jsonl_twice_is_deterministic` in `tests/schema_and_determinism.rs` |
 | Golden CLI outputs | `tests/golden/**`, `tests/cli_goldens.rs`, `./xtask regen-golden` |
 | Code quality gates | `.github/workflows/ci.yml`, `scripts/check-ci-workflow.py` |
-| Release workflow coverage | `.github/workflows/release.yml`, `scripts/check-release-workflow.py`; release tags fail fast if `CRATES_IO_TOKEN` is missing or the manifest package/version is not publishable on crates.io; `workflow_dispatch` can dry-run verify/build without publishing |
+| Release workflow coverage | `.github/workflows/release.yml`, `scripts/check-release-workflow.py`; release tags fail fast if `CRATES_IO_TOKEN` is missing or the manifest package/version is not publishable on crates.io; `workflow_dispatch` can dry-run verify/build without publishing; workflow actions are pinned to Node 24-compatible majors |
 | Coverage thresholds | fresh `cargo llvm-cov`: 89.42% lines, 75.60% branches |
 | Packaging and install path | `cargo package --allow-dirty --locked`, `cargo publish --dry-run --allow-dirty --locked`, `cargo install --path . --locked` |
-| Release dry run | GitHub Actions Release run `25961923010` succeeded with `publish=false` on `d8579d9`: verify passed, all five target artifacts/checksums were produced, and publish was skipped |
+| Release dry run | GitHub Actions Release run `25962235973` succeeded with `publish=false` on `bfbbad6`: verify passed, all five target artifacts/checksums were produced, and publish was skipped |
 | Public git history | Public `main` is pushed to `https://github.com/handgemacht-ai/spotter-rust` |
 
 ## Verified Commands
@@ -139,8 +139,8 @@ These GOAL requirements still need external release work:
 | Requirement | Current state |
 | --- | --- |
 | Release PR checklist signed off | No PR exists in this checkout |
-| Tagged on `main` | Local `v0.1.5` tag points at `d8579d9`, which is on `main`; it has not been pushed to `origin` |
-| GitHub release matrix produced all five binaries | Manual `publish=false` dry run succeeded for all five build targets in run `25961923010`; tag-triggered release has not run |
+| Tagged on `main` | No local or remote `v0.1.5` tag exists; create and push it only after release preflight passes |
+| GitHub release matrix produced all five binaries | Manual `publish=false` dry run succeeded for all five build targets in run `25962235973`; tag-triggered release has not run |
 | GitHub Release assets and checksums attached | Not done; requires pushing the release tag |
 | Published to crates.io | Blocked by [issue #1](https://github.com/handgemacht-ai/spotter-rust/issues/1): `CRATES_IO_TOKEN` is not configured, and crates.io already has `spotter` under owner `kohbis`; tag pushes fail in preflight until credentials, `CRATES_IO_OWNER_LOGIN`, and the package-name/version decision in `docs/crates-io-name-decision.md` are resolved |
 | Published binary `spotter --version` matches tag | Local binary reports `spotter 0.1.5`; published binaries do not exist yet |
@@ -150,6 +150,6 @@ These GOAL requirements still need external release work:
 1. Resolve the crates.io package-name/ownership decision for `spotter`.
 2. Configure the repository `CRATES_IO_TOKEN` secret and `CRATES_IO_OWNER_LOGIN` variable when publish ownership is ready.
 3. Open or otherwise complete the release checklist in `.github/PULL_REQUEST_TEMPLATE.md`.
-4. Push the `v0.1.5` tag on `main`.
+4. Create and push the `v0.1.5` tag on `main`.
 5. Let `.github/workflows/release.yml` build and publish artifacts.
 6. Verify GitHub Release assets/checksums and crates.io package availability.
