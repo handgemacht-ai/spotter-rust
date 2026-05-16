@@ -33,6 +33,7 @@ git checkout main
 git pull --ff-only origin main
 git status --short --branch
 
+scripts/check-github-release-config.py --repo handgemacht-ai/spotter-rust
 scripts/check-crates-io-release-ready.py
 scripts/check-release-pr-signoff.py
 cargo package --locked

@@ -50,6 +50,7 @@ scripts/make-test-fixtures.py
 git diff --exit-code -- tests/fixtures/transcripts
 scripts/check-fixtures-scrubbed.py
 scripts/test-crates-io-release-ready.py
+scripts/test-github-release-config.py
 scripts/test-release-pr-signoff.py
 scripts/test-github-release-assets.py
 scripts/test-release-complete.py

@@ -47,6 +47,7 @@ REQUIRED_SNIPPETS = {
     "release workflow": "scripts/check-release-workflow.py",
     "CI workflow": "scripts/check-ci-workflow.py",
     "crates release preflight tests": "scripts/test-crates-io-release-ready.py",
+    "GitHub release config tests": "scripts/test-github-release-config.py",
     "release PR signoff tests": "scripts/test-release-pr-signoff.py",
     "GitHub Release asset verifier tests": "scripts/test-github-release-assets.py",
     "release completion verifier tests": "scripts/test-release-complete.py",
