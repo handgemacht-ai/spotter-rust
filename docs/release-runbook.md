@@ -58,6 +58,7 @@ scripts/check-github-release-config.py --repo handgemacht-ai/spotter-rust
 scripts/check-crates-io-release-ready.py
 scripts/check-release-pr-signoff.py
 cargo package --locked
+cargo publish --dry-run --locked
 
 gh workflow run release.yml \
   -R handgemacht-ai/spotter-rust \
