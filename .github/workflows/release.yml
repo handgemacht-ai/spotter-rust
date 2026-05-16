@@ -126,7 +126,7 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ matrix.target }}" == *"-pc-windows-msvc" ]]; then
-            export RUSTFLAGS="-C link-arg=/Brepro"
+            export RUSTFLAGS="-C link-arg=/Brepro -C link-arg=/PDBALTPATH:%_PDB%"
           fi
           CARGO_TARGET_DIR=target/repro-a cargo build --release --locked --target ${{ matrix.target }}
           CARGO_TARGET_DIR=target/repro-b cargo build --release --locked --target ${{ matrix.target }}
