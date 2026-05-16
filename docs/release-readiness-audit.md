@@ -22,7 +22,7 @@ not satisfied by local implementation alone.
 | Open source under MIT | Done | `LICENSE`; `Cargo.toml` `license = "MIT"` |
 | No Phoenix app dependency, HTTP listener, hook ingestion, telemetry, phone-home, or auto-update | Verified | `scripts/check-local-only.py` is run by CI and release workflows; `README.md` documents local-only behavior |
 | Single-user local operation with SQLite default locking | Done | `rusqlite` is used directly; no server or multi-process coordination layer exists |
-| Published to crates.io as `spotter` | Blocked | `scripts/check-crates-io-release-ready.py` currently fails because crates.io already has `spotter` and `CRATES_IO_OWNER_LOGIN` is unset |
+| Published to crates.io as `spotter` | Blocked | `scripts/check-crates-io-release-ready.py` currently fails because crates.io already has `spotter` owned by `kohbis` and `CRATES_IO_OWNER_LOGIN` is unset |
 | Prebuilt GitHub Release binaries for Linux x86_64, Linux aarch64, macOS x86_64, macOS aarch64, Windows x86_64 | Partially verified | `.github/workflows/release.yml` contains all five targets; release dry run `25960974041` built all five with `publish=false`; no tag-triggered GitHub Release exists yet |
 | CHANGELOG-led versioning | Done | `CHANGELOG.md` has a `0.1.0` entry; release workflow checks manifest version against the tag and changelog |
 | Global SQLite DB at XDG-style data dir with override | Done | `src/paths.rs`; CLI accepts `--db`; README documents `~/.local/share/spotter/spotter.db` |
@@ -142,7 +142,7 @@ These GOAL requirements still need external release work:
 | Tagged on `main` | Local `v0.1.0` tag points at `main`; it has not been pushed to `origin` |
 | GitHub release matrix produced all five binaries | Manual `publish=false` dry run succeeded for all five build targets in run `25960974041`; tag-triggered release has not run |
 | GitHub Release assets and checksums attached | Not done; requires pushing the release tag |
-| Published to crates.io | Blocked by [issue #1](https://github.com/handgemacht-ai/spotter-rust/issues/1): `CRATES_IO_TOKEN` is not configured, and crates.io already has `spotter` under another owner; tag pushes fail in preflight until credentials, `CRATES_IO_OWNER_LOGIN`, and package/version publishability are resolved |
+| Published to crates.io | Blocked by [issue #1](https://github.com/handgemacht-ai/spotter-rust/issues/1): `CRATES_IO_TOKEN` is not configured, and crates.io already has `spotter` under owner `kohbis`; tag pushes fail in preflight until credentials, `CRATES_IO_OWNER_LOGIN`, and package/version publishability are resolved |
 | Published binary `spotter --version` matches tag | Local binary reports `spotter 0.1.0`; published binaries do not exist yet |
 
 ## Handoff Steps
