@@ -41,12 +41,12 @@ not satisfied by local implementation alone.
 | Richer tool-call context than Elixir `tool_call_run` | Verified | `src/db.rs` stores command components, fingerprints, sizes, file paths, source scope, and error content; covered by CLI search/flag tests |
 | Subagent transcripts are first-class and linked to parents | Verified | `src/db.rs` session/tool-run schema has parent and subagent fields; subagent fixture and tests cover sync/search/inspect output |
 | Search covers message content as well as tool calls | Verified | `messages_fts` path in `src/db.rs`; `--content-contains` in `src/cli.rs`; tests cover content search |
-| Code quality gates: fmt, clippy, tests, rustdoc, doctests, deny, machete, unsafe, no production unwrap, MSRV | Verified | `.github/workflows/ci.yml`; `scripts/check-ci-workflow.py`; CI run `25961164702` is green on the audited tree `ad0539e` |
+| Code quality gates: fmt, clippy, tests, rustdoc, doctests, deny, machete, unsafe, no production unwrap, MSRV | Verified | `.github/workflows/ci.yml`; `scripts/check-ci-workflow.py`; CI run `25961339112` is green on `7f5e3af`; this audit refresh is docs-only |
 | PR best-practice checklist exists | Done | `.github/PULL_REQUEST_TEMPLATE.md` |
 | Release PR checklist signed off | Blocked | No release PR exists in this checkout |
-| Coverage thresholds 80 percent lines and 70 percent branches | Verified | CI `coverage` job in run `25961164702`; local audit recorded 89.42 percent lines and 75.60 percent branches |
+| Coverage thresholds 80 percent lines and 70 percent branches | Verified | CI `coverage` job in run `25961339112`; local audit recorded 89.42 percent lines and 75.60 percent branches |
 | Schema snapshot, migration round-trip, and deterministic sync | Verified | `tests/golden/schema.sql`; `tests/schema_and_determinism.rs` |
-| Performance targets and hot-path benchmarks | Verified | `.github/workflows/ci.yml` performance job; CI run `25961164702` passed on the audited tree `ad0539e` |
+| Performance targets and hot-path benchmarks | Verified | `.github/workflows/ci.yml` performance job; CI run `25961339112` passed on `7f5e3af`; this audit refresh is docs-only |
 | Golden CLI outputs with redaction and regen command | Verified | `tests/golden/**`, `tests/cli_goldens.rs`, `xtask`; CI checks `./xtask regen-golden` leaves no diff |
 | Release tag on `main` | Blocked | Local `v0.1.0` points at `main`; no remote tag exists |
 | GitHub Release assets and checksums attached | Blocked | No GitHub Release exists; assets require a tag-triggered publish run |
