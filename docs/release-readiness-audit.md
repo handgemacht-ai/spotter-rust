@@ -63,7 +63,7 @@ not satisfied by local implementation alone.
 | Richer tool-call context than Elixir `tool_call_run` | Verified | `src/db.rs` stores command components, fingerprints, sizes, file paths, source scope, and error content; covered by CLI search/flag tests |
 | Subagent transcripts are first-class and linked to parents | Verified | `src/db.rs` session/tool-run schema has parent and subagent fields; subagent fixture and tests cover sync/search/inspect output |
 | Search covers message content as well as tool calls | Verified | `messages_fts` path in `src/db.rs`; `--content-contains` in `src/cli.rs`; tests cover content search |
-| Code quality gates: fmt, clippy, tests, rustdoc, doctests, deny, machete, unsafe, no production unwrap, MSRV | Verified | `.github/workflows/ci.yml`; `scripts/check-ci-workflow.py`; current release-candidate CI evidence is tracked in issue #1 |
+| Code quality gates: fmt, clippy, tests, rustdoc, doctests, deny, machete, unsafe, no production unwrap, MSRV | Verified | `.github/workflows/ci.yml`; `scripts/check-ci-workflow.py`; current release-candidate CI evidence is tracked in issue #1. CI installs a current `cargo-deny`; stale local `cargo-deny` binaries may fail before auditing if the local RustSec DB contains newer advisory syntax |
 | PR best-practice checklist exists | Done | `.github/PULL_REQUEST_TEMPLATE.md` |
 | Release PR checklist signed off | Gated | `.github/workflows/release.yml` runs `scripts/check-release-pr-signoff.py` during publish preflight, and `scripts/check-release-complete.py` re-checks the fetched release tag commit; current live signoff evidence is tracked in issue #1 |
 | Coverage thresholds 80 percent lines and 70 percent branches | Verified | CI `coverage` job runs `scripts/check-coverage-json.py target/llvm-cov.json --lines 80 --branches 70`; local audit recorded 89.42 percent lines and 75.60 percent branches |
@@ -98,9 +98,10 @@ not satisfied by local implementation alone.
 | Sync determinism | `syncing_same_jsonl_twice_is_deterministic` in `tests/schema_and_determinism.rs` |
 | Golden CLI outputs | `tests/golden/**`, `tests/cli_goldens.rs`, `./xtask regen-golden` |
 | Code quality gates | `.github/workflows/ci.yml`, `scripts/check-ci-workflow.py` |
+| Dependency hygiene | CI runs `cargo deny check` and `cargo machete`; local `cargo machete` passed. On 2026-05-16, local `cargo-deny 0.14.24` could not parse current RustSec CVSS 4.0 advisories outside this dependency graph, so a local dependency audit was run against a temporary advisory DB copy with only those parser-incompatible non-graph advisory files removed; it reported `advisories ok, bans ok, licenses ok, sources ok` |
 | Release workflow coverage | `.github/workflows/release.yml`, `scripts/check-release-workflow.py`; release tags fail fast if the release PR signoff is missing, `CRATES_IO_TOKEN` is missing, or the manifest package/version is not publishable on crates.io; `workflow_dispatch` can dry-run verify/build without publishing; workflow actions are pinned to Node 24-compatible majors |
 | GitHub release config preflight | `scripts/check-github-release-config.py --repo handgemacht-ai/spotter-rust` verifies the `CRATES_IO_TOKEN` repository secret name and `CRATES_IO_OWNER_LOGIN` repository variable before tagging |
-| Coverage thresholds | fresh `cargo llvm-cov`: 89.42% lines, 75.60% branches |
+| Coverage thresholds | CI `coverage` job on current release candidate: 89.42% lines, 75.60% branches. Local branch coverage requires a nightly toolchain with `llvm-tools-preview` |
 | Source-only install path | `README.md`; `cargo install --path . --locked`; `cargo run --locked -- --help` |
 | Package dry run | `cargo package --locked`; `cargo publish --dry-run --locked`; current clean-checkout evidence is tracked in issue #1 |
 | Release dry run | GitHub Actions Release `publish=false` dry runs verify, build all five target artifacts/checksums, and skip publish; current run evidence is tracked in issue #1 |
@@ -112,7 +113,8 @@ not satisfied by local implementation alone.
 
 ## Verified Commands
 
-The following local checks have passed on the current tree:
+The following local checks or current release-candidate CI gates have passed on
+the current tree:
 
 ```sh
 cargo fmt --check
@@ -122,9 +124,9 @@ cargo test --all-targets --all-features --locked
 cargo rustdoc --lib --locked -- -D missing_docs
 cargo test --doc --locked
 cargo check --benches --locked
-cargo deny check
+cargo deny check # CI with current cargo-deny; stale local cargo-deny may not parse current RustSec CVSS 4.0 advisories
 cargo machete
-cargo +nightly llvm-cov --all-targets --all-features --branch --json --output-path target/llvm-cov.json
+cargo +nightly llvm-cov --all-targets --all-features --branch --json --output-path target/llvm-cov.json # CI; requires llvm-tools-preview
 scripts/check-coverage-json.py target/llvm-cov.json --lines 80 --branches 70
 scripts/check-parity-checklist.sh
 scripts/check-release-workflow.py
