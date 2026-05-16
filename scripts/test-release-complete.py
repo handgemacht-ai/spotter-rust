@@ -47,6 +47,13 @@ def main() -> int:
         "GitHub Release assets mismatch",
     )
     run_case(
+        "prerelease",
+        {"/crates/spotter/0.1.5": (200, {"version": {"num": "0.1.5"}})},
+        {"FAKE_GH_PRERELEASE": "1"},
+        1,
+        "GitHub Release v0.1.5 is marked as a prerelease",
+    )
+    run_case(
         "installed version mismatch",
         {"/crates/spotter/0.1.5": (200, {"version": {"num": "0.1.5"}})},
         {"FAKE_CARGO_BAD_VERSION": "1"},
@@ -176,7 +183,7 @@ def write_fake_commands(bin_dir: Path) -> None:
             print(json.dumps({
                 "tagName": "v0.1.5",
                 "isDraft": False,
-                "isPrerelease": False,
+                "isPrerelease": bool(os.environ.get("FAKE_GH_PRERELEASE")),
                 "assets": [{"name": name} for name in assets],
             }))
             raise SystemExit(0)

@@ -121,6 +121,8 @@ def verify_github_release(
         abort(f"GitHub Release tag mismatch: expected {tag}, got {payload.get('tagName')!r}")
     if payload.get("isDraft"):
         abort(f"GitHub Release {tag} is still a draft")
+    if payload.get("isPrerelease"):
+        abort(f"GitHub Release {tag} is marked as a prerelease")
 
     actual_assets = {asset.get("name") for asset in payload.get("assets", [])}
     if actual_assets != EXPECTED_ASSETS:
