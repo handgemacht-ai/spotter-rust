@@ -37,6 +37,7 @@ verify it against `GOAL.md`.
 | Release workflow coverage | `.github/workflows/release.yml`, `scripts/check-release-workflow.py`; release tags fail fast if `CRATES_IO_TOKEN` is missing or the manifest package/version is not publishable on crates.io; `workflow_dispatch` can dry-run verify/build without publishing |
 | Coverage thresholds | fresh `cargo llvm-cov`: 89.42% lines, 75.60% branches |
 | Packaging and install path | `cargo package --allow-dirty --locked`, `cargo publish --dry-run --allow-dirty --locked`, `cargo install --path . --locked` |
+| Release dry run | GitHub Actions Release run `25960652474` succeeded with `publish=false`: verify passed, all five target artifacts/checksums were produced, and publish was skipped |
 | Public git history | Public `main` is pushed to `https://github.com/handgemacht-ai/spotter-rust` |
 
 ## Verified Commands
@@ -97,7 +98,7 @@ These GOAL requirements still need external release work:
 | --- | --- |
 | Release PR checklist signed off | No PR exists in this checkout |
 | Tagged on `main` | Local `v0.1.0` tag points at `main`; it has not been pushed to `origin` |
-| GitHub release matrix produced all five binaries | Release workflow exists but has not run from a remote tag |
+| GitHub release matrix produced all five binaries | Manual `publish=false` dry run succeeded for all five build targets in run `25960652474`; tag-triggered release has not run |
 | GitHub Release assets and checksums attached | Not done; requires pushing the release tag |
 | Published to crates.io | Blocked by [issue #1](https://github.com/handgemacht-ai/spotter-rust/issues/1): `CRATES_IO_TOKEN` is not configured, and crates.io already has `spotter` under another owner; tag pushes fail in preflight until credentials, `CRATES_IO_OWNER_LOGIN`, and package/version publishability are resolved |
 | Published binary `spotter --version` matches tag | Local binary reports `spotter 0.1.0`; published binaries do not exist yet |
@@ -107,7 +108,6 @@ These GOAL requirements still need external release work:
 1. Resolve the crates.io package-name/ownership decision for `spotter`.
 2. Configure the repository `CRATES_IO_TOKEN` secret and `CRATES_IO_OWNER_LOGIN` variable when publish ownership is ready.
 3. Open or otherwise complete the release checklist in `.github/PULL_REQUEST_TEMPLATE.md`.
-4. Run a manual release dry run with `gh workflow run release.yml --ref main -f publish=false`.
-5. Push the `v0.1.0` tag on `main`.
-6. Let `.github/workflows/release.yml` build and publish artifacts.
-7. Verify GitHub Release assets/checksums and crates.io package availability.
+4. Push the `v0.1.0` tag on `main`.
+5. Let `.github/workflows/release.yml` build and publish artifacts.
+6. Verify GitHub Release assets/checksums and crates.io package availability.
