@@ -9,7 +9,8 @@ Use this runbook after the implementation audit in
 - `CHANGELOG.md` has an entry matching the package version in `Cargo.toml`.
 - The Rust best-practice checklist in `.github/PULL_REQUEST_TEMPLATE.md` is
   signed off for the release.
-- The crates.io package decision is resolved:
+- The crates.io package decision in `docs/crates-io-name-decision.md` is
+  resolved:
   - either `spotter` is owned by the release account or team, or
   - `Cargo.toml` has been intentionally renamed and the CHANGELOG/README
     install instructions have been updated.

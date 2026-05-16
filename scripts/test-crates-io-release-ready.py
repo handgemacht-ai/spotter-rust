@@ -29,7 +29,7 @@ def main() -> int:
     run_case(
         "owner unset",
         {
-            "/crates/spotter": crate_response(["0.2.0"]),
+            "/crates/spotter": crate_response(["0.0.9"]),
             "/crates/spotter/owners": owners_response(["kohbis"]),
         },
         {},
@@ -39,7 +39,7 @@ def main() -> int:
     run_case(
         "wrong owner",
         {
-            "/crates/spotter": crate_response(["0.2.0"]),
+            "/crates/spotter": crate_response(["0.0.9"]),
             "/crates/spotter/owners": owners_response(["kohbis"]),
         },
         {"CRATES_IO_OWNER_LOGIN": "marot"},
@@ -49,12 +49,19 @@ def main() -> int:
     run_case(
         "matching owner",
         {
-            "/crates/spotter": crate_response(["0.2.0"]),
+            "/crates/spotter": crate_response(["0.0.9"]),
             "/crates/spotter/owners": owners_response(["marot"]),
         },
         {"CRATES_IO_OWNER_LOGIN": "marot"},
         0,
         "crates.io package owner is configured for spotter: marot",
+    )
+    run_case(
+        "older than existing max",
+        {"/crates/spotter": crate_response(["0.1.4", "0.0.9"])},
+        {},
+        1,
+        "manifest version 0.1.0 is not newer than existing crates.io spotter 0.1.4",
     )
     print("crates.io release preflight tests passed")
     return 0
