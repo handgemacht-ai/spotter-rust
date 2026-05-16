@@ -64,6 +64,7 @@ jobs:
       - run: scripts/check-release-workflow.py
       - run: scripts/check-ci-workflow.py
       - run: scripts/test-crates-io-release-ready.py
+      - run: scripts/test-github-release-assets.py
       - run: cargo rustdoc --lib --locked -- -D missing_docs
       - run: cargo test --doc --locked
       - run: cargo package --locked

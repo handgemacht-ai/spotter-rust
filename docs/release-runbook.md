@@ -81,7 +81,10 @@ mkdir -p target/release-verify
 gh release download "$tag" \
   -R handgemacht-ai/spotter-rust \
   --dir target/release-verify
-(cd target/release-verify && shasum -a 256 -c *.sha256)
+scripts/check-github-release-assets.py \
+  target/release-verify \
+  --expect-version "$version" \
+  --require-runnable-host
 ```
 
 The release satisfies `GOAL.md` only after crates.io contains the published

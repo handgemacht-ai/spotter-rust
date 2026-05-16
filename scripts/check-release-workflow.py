@@ -44,6 +44,7 @@ REQUIRED_SNIPPETS = {
     "release workflow": "scripts/check-release-workflow.py",
     "CI workflow": "scripts/check-ci-workflow.py",
     "crates release preflight tests": "scripts/test-crates-io-release-ready.py",
+    "GitHub Release asset verifier tests": "scripts/test-github-release-assets.py",
     "rustdoc": "cargo rustdoc --lib --locked -- -D missing_docs",
     "doctests": "cargo test --doc --locked",
     "install smoke": "scripts/check-install-smoke.sh",

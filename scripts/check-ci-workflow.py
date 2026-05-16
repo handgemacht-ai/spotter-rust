@@ -28,6 +28,7 @@ REQUIRED_SNIPPETS = {
     "release workflow": "scripts/check-release-workflow.py",
     "CI workflow": "scripts/check-ci-workflow.py",
     "crates release preflight tests": "scripts/test-crates-io-release-ready.py",
+    "GitHub Release asset verifier tests": "scripts/test-github-release-assets.py",
     "coverage run": "cargo llvm-cov --all-targets --all-features --branch --json --output-path target/llvm-cov.json",
     "coverage threshold": "scripts/check-coverage-json.py target/llvm-cov.json --lines 80 --branches 70",
     "flag parity test": "--test cli_flag_parity",
