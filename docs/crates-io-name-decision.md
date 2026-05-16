@@ -3,6 +3,10 @@
 `GOAL.md` requires publishing this CLI as `spotter` so users can run
 `cargo install spotter`.
 
+Current maintainer decision as of 2026-05-16: do not publish this package to
+crates.io and do not create a release tag for now. Keep verification green and
+use `publish=false` release dry runs only.
+
 That name is already occupied on crates.io by an unrelated package:
 
 | Field | Current value |
@@ -32,12 +36,28 @@ The Cargo Book documents the relevant crates.io constraints:
   code cannot be deleted, and
 - owners can publish new versions and manage ownership.
 
+crates.io package names are flat. A scoped package name such as
+`@handgemacht-ai/spotter` is npm-style syntax and is not a crates.io package
+name. GitHub users or teams can own a crate, but ownership does not namespace the
+published package name.
+
 Primary references:
 
 - `https://doc.rust-lang.org/cargo/reference/publishing.html`
 - `https://doc.rust-lang.org/cargo/commands/cargo-owner.html`
 
 ## Valid Paths
+
+### Do Not Publish For Now
+
+This is the active path.
+
+1. Do not create or push `v0.1.5`.
+2. Do not configure `CRATES_IO_TOKEN` or `CRATES_IO_OWNER_LOGIN`.
+3. Continue using CI, local package checks, `cargo publish --dry-run --locked`,
+   and `publish=false` release workflow runs as verification evidence.
+4. Revisit one of the publish paths below only if the maintainer decision
+   changes.
 
 ### Keep The `spotter` Name
 
@@ -82,11 +102,11 @@ gh issue create -R kohbis/spotter \
 This path avoids colliding with an existing package, but it changes the
 explicit `GOAL.md` requirement.
 
-1. Pick a new crates.io package name.
+1. Pick a new flat crates.io package name, for example `handgemacht-spotter`.
 2. Update `Cargo.toml`, `CHANGELOG.md`, `README.md`, `GOAL.md`, release
    workflow checks, and install documentation.
-3. Decide whether the installed binary should remain `spotter` or match the new
-   package name.
+3. Decide whether the installed binary should remain `spotter` while the
+   package name changes, or match the new package name.
 4. Re-run the full verification matrix and release dry run.
 
 ## Preflight Enforcement
