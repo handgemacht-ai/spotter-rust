@@ -59,4 +59,5 @@ The checked-in command parity list is at
 `docs/subcommand-parity-checklist.md`. Golden CLI outputs live under
 `tests/golden/` and can be regenerated with `./xtask regen-golden`. Release
 readiness evidence and external release blockers are tracked in
-`docs/release-readiness-audit.md`.
+`docs/release-readiness-audit.md`; the publish steps are in
+`docs/release-runbook.md`.
