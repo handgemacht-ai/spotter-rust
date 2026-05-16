@@ -38,7 +38,6 @@ verify it against `GOAL.md`.
 | Coverage thresholds | fresh `cargo llvm-cov`: 89.42% lines, 75.60% branches |
 | Packaging and install path | `cargo package --allow-dirty --locked`, `cargo publish --dry-run --allow-dirty --locked`, `cargo install --path . --locked` |
 | Public git history | Public `main` is pushed to `https://github.com/handgemacht-ai/spotter-rust` |
-| Remote CI | GitHub Actions run `25959553433` passed on `main` |
 
 ## Verified Commands
 
