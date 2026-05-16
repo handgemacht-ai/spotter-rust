@@ -1,0 +1,6 @@
+exit: 0
+stdout:
+Sequence Analysis (0 sessions):
+
+No frequent sequences found.
+stderr:

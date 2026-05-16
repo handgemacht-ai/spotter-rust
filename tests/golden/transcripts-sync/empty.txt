@@ -1,0 +1,9 @@
+exit: 0
+stdout:
+Usage: spotter transcripts sync [options]
+
+Options:
+  --session <id>            Sync a specific session by external ID
+  --file <path>             Sync from a specific JSONL transcript file
+  --transcript-root <path>  Sync all sessions under a transcript root
+stderr:

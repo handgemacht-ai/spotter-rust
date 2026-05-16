@@ -1,0 +1,7 @@
+exit: 0
+stdout:
+Tool Usage Summary (0 sessions, 0 tool calls):
+
+  Group                          Calls   Errors  Err%    Avg ms     P95 ms
+  -------------------------------------------------------------------------
+stderr:

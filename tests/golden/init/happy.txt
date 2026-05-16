@@ -1,0 +1,4 @@
+exit: 0
+stdout:
+Wrote 2 project(s) to <CASE><ABS_PATH>
+stderr:

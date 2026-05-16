@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "${1:-}" in
+  regen-golden)
+    SPOTTER_REGEN_GOLDEN=1 cargo test --locked --test cli_goldens
+    SPOTTER_REGEN_GOLDEN=1 cargo test --locked schema_matches_checked_in_snapshot
+    ;;
+  *)
+    echo "Usage: ./xtask regen-golden" >&2
+    exit 64
+    ;;
+esac

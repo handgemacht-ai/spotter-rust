@@ -1,0 +1,9 @@
+exit: 2
+stdout:
+stderr:
+error: the following required arguments were not provided:
+  <NEW_ALIAS>
+
+Usage: spotter projects alias <OLD_ALIAS> <NEW_ALIAS>
+
+For more information, try '--help'.

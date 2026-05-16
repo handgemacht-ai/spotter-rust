@@ -1,0 +1,5 @@
+exit: 0
+stdout:
+Sync for session <UUID>: ok, 39 messages.
+Synced 1 session(s).
+stderr:

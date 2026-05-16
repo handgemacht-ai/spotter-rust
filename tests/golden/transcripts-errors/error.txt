@@ -1,0 +1,6 @@
+exit: 2
+stdout:
+stderr:
+error: invalid value 'not-a-number' for '--top <TOP>': invalid digit found in string
+
+For more information, try '--help'.

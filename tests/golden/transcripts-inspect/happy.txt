@@ -1,0 +1,9 @@
+exit: 0
+stdout:
+[completed] Bash <TOOL_USE_ID> - mix phx.server (1000ms)
+[completed] Bash <TOOL_USE_ID> - tail -5 <ABS_PATH> (1000ms)
+[completed] Read <TOOL_USE_ID>_assets - (no command) (1000ms)
+[completed] Edit <TOOL_USE_ID>_assets - (no command) (1000ms)
+[completed] Grep <TOOL_USE_ID>_phoenix - (no command) (1000ms)
+[completed] Bash <TOOL_USE_ID>_routes - cargo test route_snapshot (1000ms)
+stderr:

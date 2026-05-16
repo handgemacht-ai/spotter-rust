@@ -1,0 +1,8 @@
+exit: 1
+stdout:
+Discovered 2 project(s):
+  1. <ABS_PATH>
+  2. <ABS_PATH>
+Select projects to track: enter `all`, comma-separated numbers, or blank for all.
+Selection [all]: stderr:
+project selection out of range: 99

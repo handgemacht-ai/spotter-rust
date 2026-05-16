@@ -1,0 +1,15 @@
+exit: 0
+stdout:
+Sequence Analysis (1 sessions):
+
+Frequent Sequences:
+  Bash -> Bash - 1
+  Bash -> Bash -> Read - 1
+  Bash -> Read - 1
+  Bash -> Read -> Edit - 1
+  Edit -> Grep - 1
+  Edit -> Grep -> Bash - 1
+  Grep -> Bash - 1
+  Read -> Edit - 1
+  Read -> Edit -> Grep - 1
+stderr:

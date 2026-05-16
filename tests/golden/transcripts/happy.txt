@@ -1,0 +1,16 @@
+exit: 0
+stdout:
+Spotter Transcript Analytics CLI
+
+Commands:
+
+  spotter transcripts sync       Import<ABS_PATH> transcripts and derive tool call runs
+  spotter transcripts search     Search tool call runs across sessions with filters
+  spotter transcripts inspect    Inspect tool call runs for a specific session
+  spotter transcripts compare    Compare tool runs between two session cohorts
+  spotter transcripts aggregate  Aggregate tool usage across sessions
+  spotter transcripts audit      Audit transcript import completeness
+  spotter transcripts errors     Analyze tool call errors
+  spotter transcripts health     Analyze transcript token health
+  spotter transcripts sequences  Find tool call patterns and retries
+stderr:

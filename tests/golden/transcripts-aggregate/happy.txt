@@ -1,0 +1,11 @@
+exit: 0
+stdout:
+Tool Usage Summary (1 sessions, 6 tool calls):
+
+  Group                          Calls   Errors  Err%    Avg ms     P95 ms
+  -------------------------------------------------------------------------
+  Bash                           3       0       0%      1000       1000      
+  Edit                           1       0       0%      1000       1000      
+  Grep                           1       0       0%      1000       1000      
+  Read                           1       0       0%      1000       1000      
+stderr:

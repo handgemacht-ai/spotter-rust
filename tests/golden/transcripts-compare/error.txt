@@ -1,0 +1,9 @@
+exit: 2
+stdout:
+stderr:
+error: the following required arguments were not provided:
+  --right-session <RIGHT_SESSION>
+
+Usage: spotter transcripts compare --left-session <LEFT_SESSION> --right-session <RIGHT_SESSION>
+
+For more information, try '--help'.

@@ -1,0 +1,9 @@
+exit: 0
+stdout:
+Health Summary (0 sessions):
+
+  Total cache misses:  0
+  Total token jumps:   0
+  Total waste tokens:  0
+  Peak context:        0
+stderr:

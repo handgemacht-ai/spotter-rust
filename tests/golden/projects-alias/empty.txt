@@ -1,0 +1,4 @@
+exit: 0
+stdout:
+Could not rename project fixture
+stderr:

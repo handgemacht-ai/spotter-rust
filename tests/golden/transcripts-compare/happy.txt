@@ -1,0 +1,14 @@
+exit: 0
+stdout:
+Left cohort:
+  Bash: count=3, avg_duration=1000ms
+  Edit: count=1, avg_duration=1000ms
+  Grep: count=1, avg_duration=1000ms
+  Read: count=1, avg_duration=1000ms
+
+Right cohort:
+  Bash: count=3, avg_duration=1000ms
+  Edit: count=1, avg_duration=1000ms
+  Grep: count=1, avg_duration=1000ms
+  Read: count=1, avg_duration=1000ms
+stderr:

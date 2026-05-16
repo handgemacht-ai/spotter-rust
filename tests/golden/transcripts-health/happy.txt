@@ -1,0 +1,15 @@
+exit: 0
+stdout:
+Health Report: <UUID>
+
+  Messages with usage: 31
+  Cache window:        5m cache (300s)
+  Continued session:   true
+  Startup context:     1110
+  Peak context:        1170
+  Total input:         1
+  Total output:        55
+  Total waste:         0
+  Cache misses:        0
+  Token jumps:         0
+stderr:

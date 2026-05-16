@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.75.0
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo check --all-targets --all-features --locked
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings -W clippy::pedantic -W clippy::nursery
+      - run: cargo test --all-targets --all-features --locked
+      - run: cargo rustdoc --lib --locked -- -D missing_docs
+      - run: cargo test --doc --locked
+      - run: cargo check --benches --locked
+      - run: scripts/check-install-smoke.sh
+
+  audits:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-deny --locked
+      - run: cargo install cargo-machete --locked
+      - run: cargo deny check
+      - run: cargo machete
+      - run: scripts/check-crate-roots.py
+      - run: scripts/check-local-only.py
+      - run: scripts/check-no-production-unwrap.py
+      - run: scripts/make-test-fixtures.py
+      - run: git diff --exit-code -- tests/fixtures/transcripts
+      - run: scripts/check-fixtures-scrubbed.py
+      - run: scripts/check-release-workflow.py
+      - run: scripts/check-ci-workflow.py
+
+  coverage:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: nightly
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-llvm-cov --locked
+      - run: cargo llvm-cov --all-targets --all-features --branch --json --output-path target/llvm-cov.json
+      - run: scripts/check-coverage-json.py target/llvm-cov.json --lines 80 --branches 70
+
+  command-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.75.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked --test cli_surface --test cli_sync_search --test cli_inspect_compare_aggregate --test cli_remaining_commands --test cli_flag_parity --test cli_path_overrides --test cli_goldens
+      - run: ./xtask regen-golden
+      - run: git diff --exit-code -- tests/golden
+      - run: scripts/check-parity-checklist.sh
+
+  performance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.75.0
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y hyperfine
+      - run: scripts/make-performance-fixtures.py target/perf
+      - name: Benchmark hot paths against PR base
+        if: github.event_name == 'pull_request'
+        run: |
+          current_sha="$(git rev-parse HEAD)"
+          git checkout --detach "origin/${{ github.base_ref }}"
+          cargo bench --locked --bench hot_paths -- --sample-size 10 --save-baseline pr-base
+          git checkout --detach "$current_sha"
+          cargo bench --locked --bench hot_paths -- --sample-size 10 --baseline pr-base
+          scripts/check-criterion-regression.py target/criterion --max-regression-percent 5 jsonl_parse_session_file analytics_derive_runs_via_ingest
+      - name: Benchmark hot paths
+        if: github.event_name != 'pull_request'
+        run: cargo bench --locked --bench hot_paths -- --sample-size 10
+      - run: cargo build --release --locked
+      - run: hyperfine --warmup 3 --max-runs 10 --export-json target/perf/help.json 'target/release/spotter --help'
+      - run: scripts/check-hyperfine-json.py target/perf/help.json --name 'spotter --help' --max-ms 50
+      - run: |
+          db="target/perf/tool-calls.db"
+          target/release/spotter --db "$db" transcripts sync --file target/perf/tool-calls-10k.jsonl
+          hyperfine --warmup 3 --max-runs 10 --export-json target/perf/search-10k.json "target/release/spotter --db $db transcripts search --limit 50"
+          scripts/check-hyperfine-json.py target/perf/search-10k.json --name 'search 10k tool calls' --max-ms 200
+      - run: |
+          db="target/perf/inspect.db"
+          target/release/spotter --db "$db" transcripts sync --file target/perf/inspect-5k-messages.jsonl
+          hyperfine --warmup 3 --max-runs 10 --export-json target/perf/inspect-5k.json "target/release/spotter --db $db transcripts inspect --session perf-inspect-5k --tool-use-id toolu_perf_000000 --context 2"
+          scripts/check-hyperfine-json.py target/perf/inspect-5k.json --name 'inspect 5k-message session' --max-ms 150
+      - run: |
+          hyperfine --warmup 3 --max-runs 10 \
+            --prepare 'rm -f target/perf/sync-1mib.db target/perf/sync-1mib.db-wal target/perf/sync-1mib.db-shm' \
+            --export-json target/perf/sync-1mib.json \
+            'target/release/spotter --db target/perf/sync-1mib.db transcripts sync --file target/perf/sync-1mib.jsonl'
+          scripts/check-hyperfine-json.py target/perf/sync-1mib.json --name 'sync 1 MiB JSONL' --max-ms 400
+      - run: |
+          rm -f target/perf/sync-100mib.db target/perf/sync-100mib.db-wal target/perf/sync-100mib.db-shm
+          scripts/check-rss.py --max-kb 102400 -- target/release/spotter --db target/perf/sync-100mib.db transcripts sync --file target/perf/sync-100mib.jsonl

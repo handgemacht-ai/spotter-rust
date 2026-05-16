@@ -1,0 +1,4 @@
+exit: 0
+stdout:
+No projects selected; config was not written.
+stderr:

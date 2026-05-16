@@ -1,0 +1,4 @@
+exit: 0
+stdout:
+Project not found: fixture
+stderr:

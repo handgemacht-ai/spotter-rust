@@ -1,0 +1,13 @@
+exit: 0
+stdout:
+Error Analysis (1 patterns):
+
+  Bash - 1 occurrences
+    Fingerprint: User rejected tool use
+    Category:    other (other)
+    Error rate:  50% of 2 total calls
+    First seen:  <TIMESTAMP>
+    Last seen:   <TIMESTAMP>
+    Sample:      User rejected tool use
+
+stderr:

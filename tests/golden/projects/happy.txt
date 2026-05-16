@@ -1,0 +1,6 @@
+exit: 0
+stdout:
+alias | path
+------------
+fixture | tests<ABS_PATH>
+stderr:

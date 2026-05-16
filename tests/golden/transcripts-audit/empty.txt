@@ -1,0 +1,11 @@
+exit: 0
+stdout:
+Usage: spotter transcripts audit [options]
+
+Options:
+  --file <path>     Audit a specific JSONL file
+  --session <id>    Audit by session ID
+  --project <id>    Audit recent sessions in a project
+  --limit <n>       Max sessions to audit
+  --format <fmt>    table or json
+stderr:

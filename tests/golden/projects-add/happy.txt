@@ -1,0 +1,4 @@
+exit: 0
+stdout:
+Added project fixture -> tests<ABS_PATH>
+stderr:

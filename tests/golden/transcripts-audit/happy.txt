@@ -1,0 +1,14 @@
+exit: 0
+stdout:
+Session: <UUID>
+  File: tests<ABS_PATH>
+  JSONL lines:       39
+  Imported messages: 39
+  MISSING:           0
+  Parse errors:      0
+
+  JSONL types:
+    assistant                 31
+    progress                  1
+    user                      7
+stderr:

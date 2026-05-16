@@ -1,0 +1,4 @@
+exit: 0
+stdout:
+Renamed project fixture -> renamed
+stderr:
