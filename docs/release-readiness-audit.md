@@ -22,9 +22,9 @@ not satisfied by local implementation alone.
 | Open source under MIT | Done | `LICENSE`; `Cargo.toml` `license = "MIT"` |
 | No Phoenix app dependency, HTTP listener, hook ingestion, telemetry, phone-home, or auto-update | Verified | `scripts/check-local-only.py` is run by CI and release workflows; `README.md` documents local-only behavior |
 | Single-user local operation with SQLite default locking | Done | `rusqlite` is used directly; no server or multi-process coordination layer exists |
-| Published to crates.io as `spotter` | Blocked | `scripts/check-crates-io-release-ready.py` currently fails because crates.io already has `spotter` owned by `kohbis`; the existing crate is an unrelated AWS EC2 Spot Instance Advisor CLI at version `0.1.4`, so the package-name decision in `docs/crates-io-name-decision.md` must be resolved |
+| Published to crates.io as `spotter` | Blocked | `scripts/check-crates-io-release-ready.py` currently fails because crates.io already has `spotter` owned by `kohbis`; the manifest is now `0.1.5`, newer than the unrelated AWS EC2 Spot Instance Advisor CLI `0.1.4`, but the package-name decision in `docs/crates-io-name-decision.md` must still be resolved |
 | Prebuilt GitHub Release binaries for Linux x86_64, Linux aarch64, macOS x86_64, macOS aarch64, Windows x86_64 | Partially verified | `.github/workflows/release.yml` contains all five targets; release dry run `25961201491` built all five with `publish=false`; no tag-triggered GitHub Release exists yet |
-| CHANGELOG-led versioning | Done | `CHANGELOG.md` has a `0.1.0` entry; release workflow checks manifest version against the tag and changelog |
+| CHANGELOG-led versioning | Done | `CHANGELOG.md` has a `0.1.5` entry; release workflow checks manifest version against the tag and changelog |
 | Global SQLite DB at XDG-style data dir with override | Done | `src/paths.rs`; CLI accepts `--db`; README documents `~/.local/share/spotter/spotter.db` |
 | Config file at XDG-style config dir with override | Done | `src/paths.rs`, `src/config.rs`; CLI accepts `--config`; README documents `~/.config/spotter/config.toml` |
 | Schema owned by this project with automatic migrations | Verified | `src/db.rs` runs migrations in `open`; `tests/golden/schema.sql` and `tests/schema_and_determinism.rs` verify schema and migrations |
@@ -48,7 +48,7 @@ not satisfied by local implementation alone.
 | Schema snapshot, migration round-trip, and deterministic sync | Verified | `tests/golden/schema.sql`; `tests/schema_and_determinism.rs` |
 | Performance targets and hot-path benchmarks | Verified | `.github/workflows/ci.yml` performance job; CI run `25961339112` passed on `7f5e3af`; this audit refresh is docs-only |
 | Golden CLI outputs with redaction and regen command | Verified | `tests/golden/**`, `tests/cli_goldens.rs`, `xtask`; CI checks `./xtask regen-golden` leaves no diff |
-| Release tag on `main` | Blocked | Local `v0.1.0` points at `main`; no remote tag exists |
+| Release tag on `main` | Blocked | Local `v0.1.5` points at `main`; no remote tag exists |
 | GitHub Release assets and checksums attached | Blocked | No GitHub Release exists; assets require a tag-triggered publish run |
 | Published binary `spotter --version` matches tag | Blocked | Release workflow verifies runnable targets, but no published binaries exist yet |
 
@@ -139,17 +139,17 @@ These GOAL requirements still need external release work:
 | Requirement | Current state |
 | --- | --- |
 | Release PR checklist signed off | No PR exists in this checkout |
-| Tagged on `main` | Local `v0.1.0` tag points at `main`; it has not been pushed to `origin` |
+| Tagged on `main` | Local `v0.1.5` tag points at `main`; it has not been pushed to `origin` |
 | GitHub release matrix produced all five binaries | Manual `publish=false` dry run succeeded for all five build targets in run `25961201491`; tag-triggered release has not run |
 | GitHub Release assets and checksums attached | Not done; requires pushing the release tag |
 | Published to crates.io | Blocked by [issue #1](https://github.com/handgemacht-ai/spotter-rust/issues/1): `CRATES_IO_TOKEN` is not configured, and crates.io already has `spotter` under owner `kohbis`; tag pushes fail in preflight until credentials, `CRATES_IO_OWNER_LOGIN`, and the package-name/version decision in `docs/crates-io-name-decision.md` are resolved |
-| Published binary `spotter --version` matches tag | Local binary reports `spotter 0.1.0`; published binaries do not exist yet |
+| Published binary `spotter --version` matches tag | Local binary reports `spotter 0.1.5`; published binaries do not exist yet |
 
 ## Handoff Steps
 
 1. Resolve the crates.io package-name/ownership decision for `spotter`.
 2. Configure the repository `CRATES_IO_TOKEN` secret and `CRATES_IO_OWNER_LOGIN` variable when publish ownership is ready.
 3. Open or otherwise complete the release checklist in `.github/PULL_REQUEST_TEMPLATE.md`.
-4. Push the `v0.1.0` tag on `main`.
+4. Push the `v0.1.5` tag on `main`.
 5. Let `.github/workflows/release.yml` build and publish artifacts.
 6. Verify GitHub Release assets/checksums and crates.io package availability.

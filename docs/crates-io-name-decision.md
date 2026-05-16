@@ -17,9 +17,9 @@ That name is already occupied on crates.io by an unrelated package:
 | Repository state | public, not archived, issues enabled |
 
 This is a semantic package and binary conflict, not an empty-name reservation.
-The current manifest version here is `0.1.0`, so even an ownership transfer
-would not make `cargo install spotter` install this CLI unless the release
-version is bumped above the existing `0.1.4`.
+The planned release version here is `0.1.5` so it is newer than the existing
+`0.1.4` max version. That only removes the version-order blocker; the
+package-name and ownership decision still has to be resolved before publishing.
 
 ## crates.io Policy Constraints
 
@@ -46,7 +46,7 @@ This path preserves the literal `GOAL.md` install command.
    crates.io package name for the Claude Code transcript analytics CLI.
 2. If the owner agrees, configure `CRATES_IO_OWNER_LOGIN` to the owner login
    that will publish this package.
-3. Bump `Cargo.toml` and `CHANGELOG.md` to a version newer than the existing
+3. Keep `Cargo.toml` and `CHANGELOG.md` at a version newer than the existing
    crates.io `spotter` max version.
 4. Re-run `scripts/check-crates-io-release-ready.py`.
 5. Follow `docs/release-runbook.md`.

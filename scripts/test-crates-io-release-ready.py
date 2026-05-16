@@ -21,10 +21,10 @@ def main() -> int:
     )
     run_case(
         "duplicate version",
-        {"/crates/spotter": crate_response(["0.1.0"])},
+        {"/crates/spotter": crate_response(["0.1.5"])},
         {},
         1,
-        "crates.io already has spotter 0.1.0",
+        "crates.io already has spotter 0.1.5",
     )
     run_case(
         "owner unset",
@@ -58,10 +58,10 @@ def main() -> int:
     )
     run_case(
         "older than existing max",
-        {"/crates/spotter": crate_response(["0.1.4", "0.0.9"])},
+        {"/crates/spotter": crate_response(["0.1.6", "0.0.9"])},
         {},
         1,
-        "manifest version 0.1.0 is not newer than existing crates.io spotter 0.1.4",
+        "manifest version 0.1.5 is not newer than existing crates.io spotter 0.1.6",
     )
     print("crates.io release preflight tests passed")
     return 0
