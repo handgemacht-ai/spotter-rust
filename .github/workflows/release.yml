@@ -47,6 +47,7 @@ jobs:
       - run: scripts/check-fixtures-scrubbed.py
       - run: scripts/check-release-workflow.py
       - run: scripts/check-ci-workflow.py
+      - run: scripts/test-crates-io-release-ready.py
       - run: cargo rustdoc --lib --locked -- -D missing_docs
       - run: cargo test --doc --locked
       - run: cargo package --locked

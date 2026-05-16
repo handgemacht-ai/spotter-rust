@@ -49,6 +49,7 @@ scripts/check-no-production-unwrap.py
 scripts/make-test-fixtures.py
 git diff --exit-code -- tests/fixtures/transcripts
 scripts/check-fixtures-scrubbed.py
+scripts/test-crates-io-release-ready.py
 cargo package --allow-dirty --locked
 cargo publish --dry-run --allow-dirty --locked
 scripts/check-install-smoke.sh

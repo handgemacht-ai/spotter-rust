@@ -46,6 +46,7 @@ jobs:
       - run: scripts/check-fixtures-scrubbed.py
       - run: scripts/check-release-workflow.py
       - run: scripts/check-ci-workflow.py
+      - run: scripts/test-crates-io-release-ready.py
 
   coverage:
     runs-on: ubuntu-latest
