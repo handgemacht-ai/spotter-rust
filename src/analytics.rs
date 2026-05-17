@@ -102,6 +102,19 @@ pub struct TopError {
     pub sample: String,
 }
 
+/// Error analysis output.
+#[derive(Debug, Clone, Serialize)]
+pub struct ErrorAnalysisResult {
+    /// Total matching tool calls.
+    pub total_tool_calls: usize,
+    /// Total matching failed tool calls.
+    pub total_errors: usize,
+    /// Number of distinct error patterns before top truncation.
+    pub pattern_count: usize,
+    /// Most common error patterns.
+    pub patterns: Vec<ErrorPattern>,
+}
+
 /// Error analysis row.
 #[derive(Debug, Clone, Serialize)]
 pub struct ErrorPattern {
@@ -157,6 +170,14 @@ pub struct ProjectHealth {
     pub total_waste_tokens: i64,
     /// Peak context.
     pub peak_context: i64,
+    /// Total cache read tokens.
+    pub total_cache_read_tokens: i64,
+    /// Total cache creation tokens.
+    pub total_cache_creation_tokens: i64,
+    /// Peak cache read tokens in one message.
+    pub peak_cache_read_tokens: i64,
+    /// Peak cache creation tokens in one message.
+    pub peak_cache_creation_tokens: i64,
     /// Per-session rows.
     pub sessions: Vec<ProjectHealthSession>,
 }
@@ -166,6 +187,8 @@ pub struct ProjectHealth {
 pub struct ProjectHealthSession {
     /// Claude Code session id.
     pub session_id: String,
+    /// Project alias.
+    pub project_alias: String,
     /// Message count.
     pub message_count: usize,
     /// Cache miss count.
@@ -230,8 +253,16 @@ pub struct HealthSummary {
     pub total_input: i64,
     /// Total output tokens.
     pub total_output: i64,
+    /// Total cache read tokens.
+    pub total_cache_read: i64,
+    /// Total cache creation tokens.
+    pub total_cache_creation: i64,
     /// Peak context.
     pub peak_context: i64,
+    /// Peak cache read tokens in one message.
+    pub peak_cache_read: i64,
+    /// Peak cache creation tokens in one message.
+    pub peak_cache_creation: i64,
     /// Startup context.
     pub startup_context: i64,
     /// Whether session appears continued.
@@ -424,15 +455,18 @@ pub fn error_analysis(
     filters: &RunFilters,
     top: usize,
     classify: bool,
-) -> Result<Vec<ErrorPattern>> {
+) -> Result<ErrorAnalysisResult> {
+    let all_runs = db::list_runs(conn)?;
+    let total_tool_calls = filter_runs(all_runs.clone(), filters).len();
     let mut effective = RunFilters {
         status: Some("error".to_string()),
         ..filters.clone_without_limit()
     };
     effective.limit = None;
-    let runs = filter_runs(db::list_runs(conn)?, &effective);
+    let runs = filter_runs(all_runs.clone(), &effective);
+    let total_errors = runs.len();
     let totals = if classify {
-        filter_runs(db::list_runs(conn)?, filters).into_iter().fold(
+        filter_runs(all_runs, filters).into_iter().fold(
             HashMap::<String, usize>::new(),
             |mut acc, run| {
                 *acc.entry(run.tool_name).or_default() += 1;
@@ -500,8 +534,14 @@ pub fn error_analysis(
             .then_with(|| left.tool_name.cmp(&right.tool_name))
             .then_with(|| left.fingerprint.cmp(&right.fingerprint))
     });
+    let pattern_count = patterns.len();
     patterns.truncate(top);
-    Ok(patterns)
+    Ok(ErrorAnalysisResult {
+        total_tool_calls,
+        total_errors,
+        pattern_count,
+        patterns,
+    })
 }
 
 /// Analyze one session's token health.
@@ -515,26 +555,27 @@ pub fn health_session(conn: &Connection, session_id: &str) -> Result<HealthRepor
 /// Analyze project token health.
 pub fn health_project(
     conn: &Connection,
-    project: &str,
+    project: Option<&str>,
     since: Option<&str>,
     limit: usize,
 ) -> Result<ProjectHealth> {
-    let mut sessions = db::list_sessions(conn)?
+    let sessions = db::list_sessions(conn)?
         .into_iter()
-        .filter(|session| session.project_alias == project)
+        .filter(|session| project.map_or(true, |project| session.project_alias == project))
         .filter(|session| {
             since.map_or(true, |since| {
                 session.started_at.as_deref().unwrap_or("") >= since
             })
         })
         .collect::<Vec<_>>();
-    sessions.truncate(limit);
+    let session_count = sessions.len();
 
     let mut rows = Vec::new();
     for session in sessions {
         let report = analyze_usage_messages(&usage_messages(conn, &session.id)?);
         rows.push(ProjectHealthSession {
             session_id: session.external_session_id,
+            project_alias: session.project_alias,
             message_count: report.message_count,
             cache_misses: report.cache_misses.len(),
             jumps: report.jumps.len(),
@@ -551,12 +592,32 @@ pub fn health_project(
         .map(|row| row.summary.peak_context)
         .max()
         .unwrap_or(0);
+    let total_cache_read_tokens = rows.iter().map(|row| row.summary.total_cache_read).sum();
+    let total_cache_creation_tokens = rows
+        .iter()
+        .map(|row| row.summary.total_cache_creation)
+        .sum();
+    let peak_cache_read_tokens = rows
+        .iter()
+        .map(|row| row.summary.peak_cache_read)
+        .max()
+        .unwrap_or(0);
+    let peak_cache_creation_tokens = rows
+        .iter()
+        .map(|row| row.summary.peak_cache_creation)
+        .max()
+        .unwrap_or(0);
+    rows.truncate(limit);
     Ok(ProjectHealth {
-        session_count: rows.len(),
+        session_count,
         total_cache_misses,
         total_jumps,
         total_waste_tokens,
         peak_context,
+        total_cache_read_tokens,
+        total_cache_creation_tokens,
+        peak_cache_read_tokens,
+        peak_cache_creation_tokens,
         sessions: rows,
     })
 }
@@ -1015,7 +1076,11 @@ fn analyze_usage_messages(messages: &[UsageMessage]) -> HealthReport {
             summary: HealthSummary {
                 total_input: 0,
                 total_output: 0,
+                total_cache_read: 0,
+                total_cache_creation: 0,
                 peak_context: 0,
+                peak_cache_read: 0,
+                peak_cache_creation: 0,
                 startup_context: 0,
                 is_continued: false,
                 total_waste: 0,
@@ -1028,6 +1093,24 @@ fn analyze_usage_messages(messages: &[UsageMessage]) -> HealthReport {
     let cache_misses = detect_cache_misses(messages);
     let peak_context = messages.iter().map(context_size).max().unwrap_or(0);
     let total_output = messages.iter().map(|message| message.output_tokens).sum();
+    let total_cache_read = messages
+        .iter()
+        .map(|message| message.cache_read_input_tokens)
+        .sum();
+    let total_cache_creation = messages
+        .iter()
+        .map(|message| message.cache_creation_input_tokens)
+        .sum();
+    let peak_cache_read = messages
+        .iter()
+        .map(|message| message.cache_read_input_tokens)
+        .max()
+        .unwrap_or(0);
+    let peak_cache_creation = messages
+        .iter()
+        .map(|message| message.cache_creation_input_tokens)
+        .max()
+        .unwrap_or(0);
     let startup_context = messages.first().map_or(0, context_size);
     let first_cache_ratio = messages.first().map_or(0.0, |message| {
         let context = context_size(message);
@@ -1051,7 +1134,11 @@ fn analyze_usage_messages(messages: &[UsageMessage]) -> HealthReport {
         summary: HealthSummary {
             total_input: messages.last().map_or(0, context_size),
             total_output,
+            total_cache_read,
+            total_cache_creation,
             peak_context,
+            peak_cache_read,
+            peak_cache_creation,
             startup_context,
             is_continued: first_cache_ratio >= 0.80,
             total_waste,
@@ -1431,6 +1518,8 @@ mod tests {
         let report = analyze_usage_messages(&messages);
         assert_eq!(report.cache_window.tier, "5m cache");
         assert_eq!(report.cache_misses.len(), 1);
+        assert_eq!(report.summary.total_cache_read, 221_000);
+        assert_eq!(report.summary.peak_cache_read, 220_000);
         assert!(report.jumps.iter().any(|jump| jump.is_post_compaction));
         assert!(report.jumps.iter().any(|jump| !jump.is_post_compaction));
         assert_eq!(

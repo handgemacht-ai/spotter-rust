@@ -313,7 +313,7 @@ struct HealthArgs {
     #[arg(long)]
     session: Option<String>,
 
-    /// Analyze sessions in a project.
+    /// Filter by project alias.
     #[arg(long)]
     project: Option<String>,
 
@@ -321,7 +321,7 @@ struct HealthArgs {
     #[arg(long)]
     since: Option<String>,
 
-    /// Max sessions.
+    /// Max session rows.
     #[arg(long, default_value_t = 50)]
     limit: usize,
 
@@ -539,7 +539,8 @@ struct AuditReport {
 }
 
 fn audit_file(conn: &rusqlite::Connection, file: &Path) -> Result<AuditReport> {
-    let parsed = jsonl::parse_session_file(file)?;
+    let parsed = jsonl::parse_session_file(file)
+        .with_context(|| format!("failed to parse transcript {}", file.display()))?;
     let session_id = parsed
         .session_id
         .clone()
@@ -595,9 +596,9 @@ fn errors(args: ErrorsArgs, db_path: PathBuf) -> Result<()> {
         tool: args.tool,
         ..analytics::RunFilters::default()
     };
-    let patterns = analytics::error_analysis(&conn, &filters, args.top, args.classify)?;
-    output(&patterns, &args.format, || {
-        print_errors(&patterns, args.classify)
+    let result = analytics::error_analysis(&conn, &filters, args.top, args.classify)?;
+    output(&result, &args.format, || {
+        print_errors(&result, args.classify)
     })
 }
 
@@ -608,12 +609,14 @@ fn health(args: HealthArgs, db_path: PathBuf) -> Result<()> {
         output(&report, &args.format, || {
             print_health_report(&session, &report)
         })
-    } else if let Some(project) = args.project {
-        let report = analytics::health_project(&conn, &project, args.since.as_deref(), args.limit)?;
-        output(&report, &args.format, || print_project_health(&report))
     } else {
-        print_health_usage();
-        Ok(())
+        let report = analytics::health_project(
+            &conn,
+            args.project.as_deref(),
+            args.since.as_deref(),
+            args.limit,
+        )?;
+        output(&report, &args.format, || print_project_health(&report))
     }
 }
 
@@ -781,43 +784,148 @@ fn default_alias(cwd: &Path) -> String {
 
 fn sync(args: SyncArgs, db_path: PathBuf, config: &Config, cancel: &AtomicBool) -> Result<()> {
     let mut conn = db::open(&db_path)?;
-    let mut synced = Vec::new();
 
     if let Some(file) = args.file {
-        synced.push(sync_file(&mut conn, &file, config, None, cancel)?);
+        let synced = sync_one(&mut conn, &file, config, cancel)?;
+        println!("Synced {synced} session(s).");
     } else if let Some(root) = args.transcript_root {
+        let mut synced = 0;
+        let mut failures = Vec::new();
         for file in db::transcript_files_under(&root) {
             check_cancelled(cancel)?;
-            synced.push(sync_file(&mut conn, &file, config, None, cancel)?);
+            synced +=
+                sync_one_collecting_failures(&mut conn, &file, config, cancel, &mut failures)?;
         }
+        finish_sync(synced, failures)?;
     } else if let Some(session) = args.session {
         let file = find_configured_session(config, &session).with_context(|| {
             format!("session not found in configured transcript roots: {session}")
         })?;
-        synced.push(sync_file(&mut conn, &file, config, None, cancel)?);
+        let synced = sync_one(&mut conn, &file, config, cancel)?;
+        println!("Synced {synced} session(s).");
     } else if !config.transcript_roots.is_empty() {
+        let mut synced = 0;
+        let mut failures = Vec::new();
         for root in &config.transcript_roots {
             for file in db::transcript_files_under(root) {
                 check_cancelled(cancel)?;
-                synced.push(sync_file(&mut conn, &file, config, None, cancel)?);
+                synced +=
+                    sync_one_collecting_failures(&mut conn, &file, config, cancel, &mut failures)?;
             }
         }
+        finish_sync(synced, failures)?;
     } else {
         print_sync_usage();
+    }
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct SyncFailure {
+    file: PathBuf,
+    error: anyhow::Error,
+}
+
+impl SyncFailure {
+    fn new(file: PathBuf, error: anyhow::Error) -> Self {
+        Self { file, error }
+    }
+}
+
+fn sync_one(
+    conn: &mut rusqlite::Connection,
+    file: &Path,
+    config: &Config,
+    cancel: &AtomicBool,
+) -> Result<usize> {
+    let record = sync_file(conn, file, config, None, cancel)?;
+    check_cancelled(cancel)?;
+    println!(
+        "Sync for session {}: ok, {} messages.",
+        record.external_session_id, record.message_count
+    );
+    let subagents = sync_subagents(conn, &record, config, cancel)?;
+    Ok(1 + subagents)
+}
+
+fn sync_one_collecting_failures(
+    conn: &mut rusqlite::Connection,
+    file: &Path,
+    config: &Config,
+    cancel: &AtomicBool,
+    failures: &mut Vec<SyncFailure>,
+) -> Result<usize> {
+    let record = match sync_file(conn, file, config, None, cancel) {
+        Ok(record) => record,
+        Err(error) => {
+            failures.push(SyncFailure::new(file.to_path_buf(), error));
+            return Ok(0);
+        }
+    };
+    check_cancelled(cancel)?;
+    println!(
+        "Sync for session {}: ok, {} messages.",
+        record.external_session_id, record.message_count
+    );
+    let subagents = sync_subagents_collecting_failures(conn, &record, config, cancel, failures)?;
+    Ok(1 + subagents)
+}
+
+fn finish_sync(synced: usize, failures: Vec<SyncFailure>) -> Result<()> {
+    println!("Synced {synced} session(s).");
+    if failures.is_empty() {
         return Ok(());
     }
 
-    for record in &synced {
-        check_cancelled(cancel)?;
-        println!(
-            "Sync for session {}: ok, {} messages.",
-            record.external_session_id, record.message_count
+    for failure in &failures {
+        eprintln!(
+            "Failed to sync {}: {:#}",
+            failure.file.display(),
+            failure.error
         );
-        sync_subagents(&mut conn, record, config, cancel)?;
+    }
+    anyhow::bail!(
+        "synced {synced} session(s), failed {} transcript(s)",
+        failures.len()
+    )
+}
+
+fn sync_subagents_collecting_failures(
+    conn: &mut rusqlite::Connection,
+    parent: &db::SessionRecord,
+    config: &Config,
+    cancel: &AtomicBool,
+    failures: &mut Vec<SyncFailure>,
+) -> Result<usize> {
+    let subagent_dir = Path::new(&parent.transcript_path)
+        .with_file_name(&parent.external_session_id)
+        .join("subagents");
+    if !subagent_dir.exists() {
+        return Ok(0);
     }
 
-    println!("Synced {} session(s).", synced.len());
-    Ok(())
+    let mut synced = 0;
+    for entry in std::fs::read_dir(&subagent_dir)
+        .with_context(|| format!("failed to read {}", subagent_dir.display()))?
+    {
+        let path = entry?.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
+            check_cancelled(cancel)?;
+            match sync_file(conn, &path, config, Some(&parent.id), cancel) {
+                Ok(record) => {
+                    println!(
+                        "Sync for subagent {}: ok, {} messages.",
+                        record.agent_id.as_deref().unwrap_or("unknown"),
+                        record.message_count
+                    );
+                    synced += 1;
+                }
+                Err(error) => failures.push(SyncFailure::new(path, error)),
+            }
+        }
+    }
+    Ok(synced)
 }
 
 fn sync_file(
@@ -829,10 +937,11 @@ fn sync_file(
 ) -> Result<db::SessionRecord> {
     check_cancelled(cancel)?;
     let scanned = if parent_session_id.is_some() {
-        jsonl::scan_subagent_file(file)?
+        jsonl::scan_subagent_file(file)
     } else {
-        jsonl::scan_session_file(file)?
-    };
+        jsonl::scan_session_file(file)
+    }
+    .with_context(|| format!("failed to scan transcript {}", file.display()))?;
     let project_alias = config.alias_for_cwd(scanned.cwd.as_deref());
     let project_path = scanned
         .cwd
@@ -853,14 +962,15 @@ fn sync_subagents(
     parent: &db::SessionRecord,
     config: &Config,
     cancel: &AtomicBool,
-) -> Result<()> {
+) -> Result<usize> {
     let subagent_dir = Path::new(&parent.transcript_path)
         .with_file_name(&parent.external_session_id)
         .join("subagents");
     if !subagent_dir.exists() {
-        return Ok(());
+        return Ok(0);
     }
 
+    let mut synced = 0;
     for entry in std::fs::read_dir(&subagent_dir)
         .with_context(|| format!("failed to read {}", subagent_dir.display()))?
     {
@@ -873,9 +983,10 @@ fn sync_subagents(
                 record.agent_id.as_deref().unwrap_or("unknown"),
                 record.message_count
             );
+            synced += 1;
         }
     }
-    Ok(())
+    Ok(synced)
 }
 
 fn find_configured_session(config: &Config, session: &str) -> Option<PathBuf> {
@@ -1145,14 +1256,19 @@ fn print_audit_reports(reports: &[AuditReport]) {
     }
 }
 
-fn print_errors(patterns: &[analytics::ErrorPattern], classify: bool) {
-    if patterns.is_empty() {
+fn print_errors(result: &analytics::ErrorAnalysisResult, classify: bool) {
+    if result.total_errors == 0 {
         println!("No errors found.");
         return;
     }
 
-    println!("Error Analysis ({} patterns):\n", patterns.len());
-    for pattern in patterns {
+    println!(
+        "Error Analysis ({} errors, {} patterns, showing {}):\n",
+        result.total_errors,
+        result.pattern_count,
+        result.patterns.len()
+    );
+    for pattern in &result.patterns {
         println!("  {} - {} occurrences", pattern.tool_name, pattern.count);
         println!("    Fingerprint: {}", pattern.fingerprint);
         if classify {
@@ -1197,6 +1313,16 @@ fn print_health_report(session: &str, report: &analytics::HealthReport) {
     println!("  Peak context:        {}", report.summary.peak_context);
     println!("  Total input:         {}", report.summary.total_input);
     println!("  Total output:        {}", report.summary.total_output);
+    println!("  Total cache read:    {}", report.summary.total_cache_read);
+    println!(
+        "  Total cache create:  {}",
+        report.summary.total_cache_creation
+    );
+    println!("  Peak cache read:     {}", report.summary.peak_cache_read);
+    println!(
+        "  Peak cache create:   {}",
+        report.summary.peak_cache_creation
+    );
     println!("  Total waste:         {}", report.summary.total_waste);
     println!("  Cache misses:        {}", report.cache_misses.len());
     println!("  Token jumps:         {}", report.jumps.len());
@@ -1208,6 +1334,16 @@ fn print_project_health(report: &analytics::ProjectHealth) {
     println!("  Total token jumps:   {}", report.total_jumps);
     println!("  Total waste tokens:  {}", report.total_waste_tokens);
     println!("  Peak context:        {}", report.peak_context);
+    println!("  Total cache read:    {}", report.total_cache_read_tokens);
+    println!(
+        "  Total cache create:  {}",
+        report.total_cache_creation_tokens
+    );
+    println!("  Peak cache read:     {}", report.peak_cache_read_tokens);
+    println!(
+        "  Peak cache create:   {}",
+        report.peak_cache_creation_tokens
+    );
 }
 
 fn print_sequences(result: &analytics::SequenceResult) {
@@ -1242,12 +1378,6 @@ fn print_sequences(result: &analytics::SequenceResult) {
 fn print_audit_usage() {
     println!(
         "Usage: spotter transcripts audit [options]\n\nOptions:\n  --file <path>     Audit a specific JSONL file\n  --session <id>    Audit by session ID\n  --project <id>    Audit recent sessions in a project\n  --limit <n>       Max sessions to audit\n  --format <fmt>    table or json"
-    );
-}
-
-fn print_health_usage() {
-    println!(
-        "Usage: spotter transcripts health [options]\n\nOptions:\n  --session <id>    Analyze a single session\n  --project <id>    Analyze sessions in a project\n  --since <date>    Only sessions after this date\n  --limit <n>       Max sessions\n  --format <fmt>    table or json"
     );
 }
 

@@ -61,7 +61,8 @@ fn audit_errors_health_sequences_projects_and_init_work() {
         "--format",
         "json",
     ]);
-    assert!(errors.as_array().expect("array").len() <= 5);
+    assert!(errors["patterns"].as_array().expect("patterns").len() <= 5);
+    assert!(errors["total_errors"].as_u64().expect("total errors") > 0);
 
     let health = command_json(&[
         "--db",
@@ -74,6 +75,12 @@ fn audit_errors_health_sequences_projects_and_init_work() {
         "json",
     ]);
     assert!(health["message_count"].as_u64().expect("count") > 0);
+
+    let global_health =
+        command_json(&["--db", db_path, "transcripts", "health", "--format", "json"]);
+    assert!(global_health["session_count"].as_u64().expect("sessions") > 0);
+    assert!(global_health["total_cache_read_tokens"].is_number());
+    assert!(global_health["peak_cache_creation_tokens"].is_number());
 
     let sequences = command_json(&[
         "--db",

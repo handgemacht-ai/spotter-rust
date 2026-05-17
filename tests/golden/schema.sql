@@ -6,6 +6,7 @@ CREATE INDEX idx_tool_runs_project ON tool_call_runs(project_alias);
 CREATE INDEX idx_tool_runs_session ON tool_call_runs(session_id);
 CREATE INDEX idx_tool_runs_status ON tool_call_runs(status);
 CREATE INDEX idx_tool_runs_tool_name ON tool_call_runs(tool_name);
+CREATE INDEX idx_tool_runs_tool_use ON tool_call_runs(tool_use_id);
 CREATE TABLE messages (
             session_id TEXT NOT NULL,
             ordinal INTEGER NOT NULL,
@@ -52,7 +53,7 @@ CREATE TABLE sessions (
             FOREIGN KEY(project_alias) REFERENCES projects(alias)
         );
 CREATE TABLE tool_call_runs (
-            tool_use_id TEXT PRIMARY KEY,
+            tool_use_id TEXT NOT NULL,
             session_id TEXT NOT NULL,
             external_session_id TEXT NOT NULL,
             parent_session_id TEXT,
@@ -78,6 +79,7 @@ CREATE TABLE tool_call_runs (
             project_alias TEXT NOT NULL,
             worktree_name TEXT,
             canonical_cwd TEXT,
+            PRIMARY KEY(session_id, tool_use_id),
             FOREIGN KEY(session_id) REFERENCES sessions(id),
             FOREIGN KEY(project_alias) REFERENCES projects(alias)
         );

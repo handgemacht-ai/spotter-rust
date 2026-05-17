@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 
 use crate::jsonl::{content_blocks, ParsedSession, TranscriptMessage};
 
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 
 /// A stored transcript session.
 #[derive(Debug, Clone, Serialize)]
@@ -172,7 +172,7 @@ pub fn canonical_content_hash(conn: &Connection) -> Result<String> {
         "SELECT alias, path FROM projects ORDER BY alias",
         "SELECT id, external_session_id, parent_session_id, is_subagent, agent_id, project_alias, transcript_path, cwd, slug, git_branch, version, started_at, ended_at, message_count FROM sessions ORDER BY id",
         "SELECT session_id, ordinal, uuid, parent_uuid, message_id, record_type, role, content, search_text, raw_payload, timestamp, is_sidechain, agent_id, tool_use_id, parent_tool_use_id, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, model FROM messages ORDER BY session_id, ordinal",
-        "SELECT tool_use_id, session_id, external_session_id, parent_session_id, is_subagent, agent_id, tool_name, command, command_program, command_args, command_fingerprint, input_summary, input_size, output_size, file_paths, status, started_at, finished_at, duration_ms, start_ordinal, end_ordinal, source_scope, error_content, project_alias, worktree_name, canonical_cwd FROM tool_call_runs ORDER BY tool_use_id",
+        "SELECT tool_use_id, session_id, external_session_id, parent_session_id, is_subagent, agent_id, tool_name, command, command_program, command_args, command_fingerprint, input_summary, input_size, output_size, file_paths, status, started_at, finished_at, duration_ms, start_ordinal, end_ordinal, source_scope, error_content, project_alias, worktree_name, canonical_cwd FROM tool_call_runs ORDER BY session_id, tool_use_id",
     ] {
         let mut stmt = conn.prepare(query)?;
         let column_count = stmt.column_count();
@@ -260,10 +260,11 @@ pub fn ingest_session_file_with_cancel(
 
     let subagent = parent_session_id.is_some();
     let parsed = if subagent {
-        crate::jsonl::scan_subagent_file(transcript_path)?
+        crate::jsonl::scan_subagent_file(transcript_path)
     } else {
-        crate::jsonl::scan_session_file(transcript_path)?
-    };
+        crate::jsonl::scan_session_file(transcript_path)
+    }
+    .with_context(|| format!("failed to scan transcript {}", transcript_path.display()))?;
     let record =
         session_record_from_parsed(&parsed, transcript_path, project_alias, parent_session_id)?;
     let session_id = record.id.clone();
@@ -282,7 +283,14 @@ pub fn ingest_session_file_with_cancel(
         let line = line
             .with_context(|| format!("failed to read transcript {}", transcript_path.display()))?;
         let Some(message) =
-            crate::jsonl::parse_message_line(&line, index as i64, &source_scope, index + 1)?
+            crate::jsonl::parse_message_line(&line, index as i64, &source_scope, index + 1)
+                .with_context(|| {
+                    format!(
+                        "failed to parse transcript {} line {}",
+                        transcript_path.display(),
+                        index + 1
+                    )
+                })?
         else {
             continue;
         };
@@ -556,7 +564,7 @@ fn migrate(conn: &Connection, path: &Path) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_messages_tool_use ON messages(tool_use_id);
 
         CREATE TABLE IF NOT EXISTS tool_call_runs (
-            tool_use_id TEXT PRIMARY KEY,
+            tool_use_id TEXT NOT NULL,
             session_id TEXT NOT NULL,
             external_session_id TEXT NOT NULL,
             parent_session_id TEXT,
@@ -582,10 +590,12 @@ fn migrate(conn: &Connection, path: &Path) -> Result<()> {
             project_alias TEXT NOT NULL,
             worktree_name TEXT,
             canonical_cwd TEXT,
+            PRIMARY KEY(session_id, tool_use_id),
             FOREIGN KEY(session_id) REFERENCES sessions(id),
             FOREIGN KEY(project_alias) REFERENCES projects(alias)
         );
 
+        CREATE INDEX IF NOT EXISTS idx_tool_runs_tool_use ON tool_call_runs(tool_use_id);
         CREATE INDEX IF NOT EXISTS idx_tool_runs_session ON tool_call_runs(session_id);
         CREATE INDEX IF NOT EXISTS idx_tool_runs_project ON tool_call_runs(project_alias);
         CREATE INDEX IF NOT EXISTS idx_tool_runs_status ON tool_call_runs(status);
@@ -594,8 +604,99 @@ fn migrate(conn: &Connection, path: &Path) -> Result<()> {
         ",
     )?;
     ensure_search_text_column(conn)?;
-    conn.execute_batch("PRAGMA user_version = 3;")?;
+    ensure_tool_call_runs_session_key(conn)?;
+    conn.execute_batch("PRAGMA user_version = 4;")?;
     Ok(())
+}
+
+fn ensure_tool_call_runs_session_key(conn: &Connection) -> Result<()> {
+    if tool_call_runs_has_session_key(conn)? {
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tool_runs_tool_use ON tool_call_runs(tool_use_id)",
+            [],
+        )?;
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        "
+        ALTER TABLE tool_call_runs RENAME TO tool_call_runs_old;
+
+        CREATE TABLE tool_call_runs (
+            tool_use_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            external_session_id TEXT NOT NULL,
+            parent_session_id TEXT,
+            is_subagent INTEGER NOT NULL,
+            agent_id TEXT,
+            tool_name TEXT NOT NULL,
+            command TEXT,
+            command_program TEXT,
+            command_args TEXT NOT NULL,
+            command_fingerprint TEXT,
+            input_summary TEXT,
+            input_size INTEGER,
+            output_size INTEGER,
+            file_paths TEXT NOT NULL,
+            status TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            duration_ms INTEGER,
+            start_ordinal INTEGER,
+            end_ordinal INTEGER,
+            source_scope TEXT,
+            error_content TEXT,
+            project_alias TEXT NOT NULL,
+            worktree_name TEXT,
+            canonical_cwd TEXT,
+            PRIMARY KEY(session_id, tool_use_id),
+            FOREIGN KEY(session_id) REFERENCES sessions(id),
+            FOREIGN KEY(project_alias) REFERENCES projects(alias)
+        );
+
+        INSERT INTO tool_call_runs(
+            tool_use_id, session_id, external_session_id, parent_session_id, is_subagent,
+            agent_id, tool_name, command, command_program, command_args, command_fingerprint,
+            input_summary, input_size, output_size, file_paths, status, started_at, finished_at,
+            duration_ms, start_ordinal, end_ordinal, source_scope, error_content, project_alias,
+            worktree_name, canonical_cwd
+        )
+        SELECT
+            tool_use_id, session_id, external_session_id, parent_session_id, is_subagent,
+            agent_id, tool_name, command, command_program, command_args, command_fingerprint,
+            input_summary, input_size, output_size, file_paths, status, started_at, finished_at,
+            duration_ms, start_ordinal, end_ordinal, source_scope, error_content, project_alias,
+            worktree_name, canonical_cwd
+        FROM tool_call_runs_old;
+
+        DROP TABLE tool_call_runs_old;
+
+        CREATE INDEX IF NOT EXISTS idx_tool_runs_tool_use ON tool_call_runs(tool_use_id);
+        CREATE INDEX IF NOT EXISTS idx_tool_runs_session ON tool_call_runs(session_id);
+        CREATE INDEX IF NOT EXISTS idx_tool_runs_project ON tool_call_runs(project_alias);
+        CREATE INDEX IF NOT EXISTS idx_tool_runs_status ON tool_call_runs(status);
+        CREATE INDEX IF NOT EXISTS idx_tool_runs_tool_name ON tool_call_runs(tool_name);
+        ",
+    )?;
+    Ok(())
+}
+
+fn tool_call_runs_has_session_key(conn: &Connection) -> Result<bool> {
+    let mut stmt = conn.prepare("PRAGMA table_info(tool_call_runs)")?;
+    let columns = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(1)?, row.get::<_, i64>(5)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let session_pk = columns
+        .iter()
+        .find_map(|(name, pk)| (name == "session_id").then_some(*pk));
+    let tool_pk = columns
+        .iter()
+        .find_map(|(name, pk)| (name == "tool_use_id").then_some(*pk));
+
+    Ok(session_pk == Some(1) && tool_pk == Some(2))
 }
 
 fn snapshot_database(path: &Path, version: i32) -> Result<()> {

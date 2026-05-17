@@ -9,6 +9,10 @@ Health Report: <UUID>
   Peak context:        1170
   Total input:         1
   Total output:        55
+  Total cache read:    6000
+  Total cache create:  60
+  Peak cache read:     1000
+  Peak cache create:   10
   Total waste:         0
   Cache misses:        0
   Token jumps:         0

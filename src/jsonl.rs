@@ -163,6 +163,8 @@ struct RawTopLevel {
     entrypoint: Option<Value>,
     #[serde(rename = "userType")]
     user_type: Option<Value>,
+    #[serde(rename = "sessionKind")]
+    session_kind: Option<Value>,
     #[serde(rename = "requestId")]
     request_id: Option<Value>,
     error: Option<Value>,
@@ -734,6 +736,7 @@ const TOP_LEVEL_FIELDS: &[&str] = &[
     "role",
     "entrypoint",
     "userType",
+    "sessionKind",
     "requestId",
     "error",
     "apiError",
@@ -840,6 +843,19 @@ mod tests {
             Some("55604662-cf2a-4331-851a-ec234028f8ca")
         );
         assert!(!parsed.messages.is_empty());
+    }
+
+    #[test]
+    fn accepts_session_kind_metadata() {
+        let mut value = base_message();
+        value
+            .as_object_mut()
+            .expect("object")
+            .insert("sessionKind".to_string(), json!("bg"));
+
+        let parsed = normalize_message(value, 0, "main", 1).expect("sessionKind should parse");
+
+        assert_eq!(parsed.session_id.as_deref(), Some("session-a"));
     }
 
     proptest! {

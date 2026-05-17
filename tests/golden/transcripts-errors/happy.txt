@@ -1,6 +1,6 @@
 exit: 0
 stdout:
-Error Analysis (1 patterns):
+Error Analysis (1 errors, 1 patterns, showing 1):
 
   Bash - 1 occurrences
     Fingerprint: User rejected tool use

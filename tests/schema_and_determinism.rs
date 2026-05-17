@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
+use serde_json::{json, Value};
 use tempfile::NamedTempFile;
 
 use spotter::{config::Config, db, jsonl};
@@ -38,7 +39,7 @@ fn migration_from_v2_snapshots_backfills_and_preserves_data() {
     let user_version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("user version");
-    assert_eq!(user_version, 3);
+    assert_eq!(user_version, 4);
 
     let message_count: i64 = conn
         .query_row("SELECT count(*) FROM messages", [], |row| row.get(0))
@@ -63,6 +64,7 @@ fn migration_from_v2_snapshots_backfills_and_preserves_data() {
         "idx_tool_runs_session",
         "idx_tool_runs_status",
         "idx_tool_runs_tool_name",
+        "idx_tool_runs_tool_use",
     ] {
         let exists: i64 = conn
             .query_row(
@@ -118,6 +120,52 @@ fn syncing_same_jsonl_twice_is_deterministic() {
     let second = db::canonical_content_hash(&conn).expect("hash");
 
     assert_eq!(first, second);
+}
+
+#[test]
+fn duplicate_tool_ids_are_scoped_by_session() {
+    let db_file = NamedTempFile::new().expect("temp db");
+    let mut conn = db::open(db_file.path()).expect("open db");
+
+    let first = parsed_session_with_tool_id("session-a", "toolu_duplicate", "echo a");
+    let second = parsed_session_with_tool_id("session-b", "toolu_duplicate", "echo b");
+
+    db::ingest_session(
+        &mut conn,
+        &first,
+        Path::new("/tmp/session-a.jsonl"),
+        "fixture",
+        Path::new("/tmp"),
+        None,
+    )
+    .expect("first ingest");
+    db::ingest_session(
+        &mut conn,
+        &second,
+        Path::new("/tmp/session-b.jsonl"),
+        "fixture",
+        Path::new("/tmp"),
+        None,
+    )
+    .expect("second ingest with duplicate tool id");
+
+    let duplicate_runs: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM tool_call_runs WHERE tool_use_id = 'toolu_duplicate'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("duplicate run count");
+    assert_eq!(duplicate_runs, 2);
+
+    let distinct_sessions: i64 = conn
+        .query_row(
+            "SELECT count(DISTINCT session_id) FROM tool_call_runs WHERE tool_use_id = 'toolu_duplicate'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("distinct session count");
+    assert_eq!(distinct_sessions, 2);
 }
 
 #[test]
@@ -210,6 +258,7 @@ fn seeded_database_keeps_data_indexes_and_integrity() {
         "idx_tool_runs_session",
         "idx_tool_runs_status",
         "idx_tool_runs_tool_name",
+        "idx_tool_runs_tool_use",
     ] {
         let exists: i64 = conn
             .query_row(
@@ -225,6 +274,89 @@ fn seeded_database_keeps_data_indexes_and_integrity() {
         .query_row("PRAGMA integrity_check", [], |row| row.get(0))
         .expect("integrity check");
     assert_eq!(integrity, "ok");
+}
+
+fn parsed_session_with_tool_id(
+    session_id: &str,
+    tool_use_id: &str,
+    command: &str,
+) -> jsonl::ParsedSession {
+    jsonl::ParsedSession {
+        session_id: Some(session_id.to_string()),
+        slug: None,
+        cwd: Some("/tmp".to_string()),
+        git_branch: Some("main".to_string()),
+        version: Some("test".to_string()),
+        started_at: None,
+        ended_at: None,
+        agent_id: None,
+        message_count: 2,
+        messages: vec![
+            transcript_message(
+                session_id,
+                0,
+                "assistant",
+                json!({
+                    "blocks": [{
+                        "type": "tool_use",
+                        "id": tool_use_id,
+                        "name": "Bash",
+                        "input": {"command": command}
+                    }]
+                }),
+            ),
+            transcript_message(
+                session_id,
+                1,
+                "user",
+                json!({
+                    "blocks": [{
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": "ok",
+                        "is_error": false
+                    }]
+                }),
+            ),
+        ],
+    }
+}
+
+fn transcript_message(
+    session_id: &str,
+    ordinal: i64,
+    normalized_type: &str,
+    content: Value,
+) -> jsonl::TranscriptMessage {
+    jsonl::TranscriptMessage {
+        ordinal,
+        source_scope: "main".to_string(),
+        record_type: Some(normalized_type.to_string()),
+        normalized_type: normalized_type.to_string(),
+        uuid: Some(format!("{session_id}-{ordinal}")),
+        parent_uuid: None,
+        message_id: None,
+        role: None,
+        content,
+        raw_payload: Value::Null,
+        timestamp: None,
+        is_sidechain: false,
+        agent_id: None,
+        tool_use_id: None,
+        parent_tool_use_id: None,
+        session_id: Some(session_id.to_string()),
+        slug: None,
+        cwd: Some("/tmp".to_string()),
+        git_branch: Some("main".to_string()),
+        version: Some("test".to_string()),
+        team_name: None,
+        agent_name: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
+        model: None,
+    }
 }
 
 fn sync_once(conn: &mut rusqlite::Connection, fixture: &Path, config: &Config) {

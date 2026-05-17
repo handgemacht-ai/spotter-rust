@@ -285,7 +285,11 @@ fn carried_over_flags_accept_representative_values() {
             "json",
         ],
     );
-    assert!(!errors.as_array().expect("errors").is_empty());
+    assert!(errors["total_errors"].as_u64().expect("total errors") > 0);
+    assert!(!errors["patterns"]
+        .as_array()
+        .expect("error patterns")
+        .is_empty());
 
     let health = command_json(
         db_path,

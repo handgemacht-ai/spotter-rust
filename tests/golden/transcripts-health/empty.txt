@@ -6,4 +6,8 @@ Health Summary (0 sessions):
   Total token jumps:   0
   Total waste tokens:  0
   Peak context:        0
+  Total cache read:    0
+  Total cache create:  0
+  Peak cache read:     0
+  Peak cache create:   0
 stderr:
