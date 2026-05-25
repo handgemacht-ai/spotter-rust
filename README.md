@@ -30,6 +30,58 @@ spotter transcripts sequences --recovery
 All parsing and storage is local. There is no telemetry, no HTTP listener, and
 no auto-update check.
 
+## Scanning transcripts without the database
+
+`spotter scan` runs the same analytics as `spotter transcripts <verb>`, but
+parses JSONL transcripts on demand instead of reading from SQLite. Use it
+when you do not want to sync into the DB first, when you only care about a
+single file, or when you want to query a transcript root the DB has never
+seen.
+
+```sh
+spotter scan --file session.jsonl search --tool Bash --limit 20
+spotter scan --root ~/.claude_agents/projects errors --classify
+spotter scan --file session.jsonl health --session <session-id>
+```
+
+### Target selection
+
+`--file <path>` (repeatable) and `--root <path>` (repeatable) are global to
+every subcommand. With no targets given, scan walks `~/.claude/projects` and
+`~/.claude_agents/projects` if they exist, or the `transcript_roots` in
+config. Pass `--no-subagents` to skip `subagents/` directories when walking a
+root.
+
+### Subcommands (mirror `transcripts`)
+
+| Subcommand                  | What it does                                                                    |
+|-----------------------------|---------------------------------------------------------------------------------|
+| `scan search`               | Filter tool-call runs by project/worktree/session/tool/command/error/file path, duration, status, since. `--content-contains` substring-matches transcript message content. `--group-by-session` aggregates rows. |
+| `scan inspect --session`    | Show tool-call runs for one session sorted by ordinal. `--tool-use-id`, `--status`, `--context`, `--with-messages` work the same as the DB path. |
+| `scan compare`              | Compare tool runs between two session cohorts (`--left-session`/`--right-session`, repeatable). |
+| `scan aggregate`            | Group tool usage by `tool_name`, `status`, etc. with counts, error rates, p50/p95 durations, top errors. |
+| `scan audit`                | Report JSONL line counts, parsed message counts, and message-type histograms per file. |
+| `scan errors`               | Group tool-call errors into normalized fingerprints. `--classify` adds category and preventability. |
+| `scan health --session`     | Per-session token-health analysis: cache window, cache misses, token jumps, peak context, total waste. |
+| `scan health` (no session)  | Project-level rollup of token-health metrics. |
+| `scan sequences`            | Detect frequent tool-call n-grams and retry patterns. `--recovery` adds recovery-rate stats. |
+
+### Output formats
+
+Every subcommand accepts `--format table` (default) or `--format json`. The
+JSON shape is identical to the matching `transcripts <verb>` JSON shape; this
+is pinned by integration tests that sync a fixture into SQLite, run both
+paths, and assert byte-equivalent JSON.
+
+### When to prefer `scan` vs `transcripts`
+
+- Use `scan` for one-off questions against arbitrary transcripts, ad-hoc
+  forensics ("which session deleted this file?"), or running analytics
+  against transcripts that live outside your normal `transcript_roots`.
+- Use `transcripts` when you want fast repeated queries over the same set of
+  transcripts (the DB amortizes parsing cost), full-text search via FTS, or
+  the message-context output that depends on stored message rows.
+
 ## Current Release Status
 
 `spotter` is not currently published to crates.io and there is no GitHub Release
