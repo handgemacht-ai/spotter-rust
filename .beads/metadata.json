@@ -1,0 +1,10 @@
+{
+  "backend": "dolt",
+  "database": "dolt",
+  "dolt_database": "spotter",
+  "dolt_mode": "server",
+  "dolt_server_host": "127.0.0.1",
+  "dolt_server_port": 3308,
+  "dolt_server_user": "root",
+  "project_id": "82ca8033-2178-46eb-9b22-4622938f7065"
+}

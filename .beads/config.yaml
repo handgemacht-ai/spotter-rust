@@ -1,0 +1,9 @@
+dolt.auto-start: false
+dolt.database: "spotter"
+dolt.host: "127.0.0.1"
+dolt.port: 3308
+dolt.shared-server: true
+export.auto: false
+issue-prefix: "spotter"
+sync-branch: "beads-sync"
+sync.mode: "dolt-native"
