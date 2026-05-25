@@ -313,7 +313,11 @@ fn check_cancelled(cancel: &AtomicBool) -> Result<()> {
     Ok(())
 }
 
-fn session_record_from_parsed(
+/// Build a `SessionRecord` from a parsed transcript without touching the database.
+///
+/// Shared by the SQLite-backed `sync` path and the DB-less `scan` path so both
+/// emit identical run shape.
+pub fn session_record_from_parsed(
     parsed: &ParsedSession,
     transcript_path: &Path,
     project_alias: &str,
@@ -854,7 +858,12 @@ fn insert_tool_call_run(conn: &Connection, run: &ToolCallRun) -> Result<()> {
     Ok(())
 }
 
-fn derive_runs(parsed: &ParsedSession, session: &SessionRecord) -> Vec<ToolCallRun> {
+/// Derive tool-call runs from a parsed transcript and its session record.
+///
+/// This is the same function `sync` uses to populate `SQLite`; the `scan` path
+/// calls it without ever opening a database, which is how both paths stay in
+/// lock-step on derivation shape.
+pub fn derive_runs(parsed: &ParsedSession, session: &SessionRecord) -> Vec<ToolCallRun> {
     let mut uses = BTreeMap::new();
     let mut results = HashMap::new();
 
@@ -1254,4 +1263,26 @@ pub fn transcript_files_under(root: &Path) -> Vec<PathBuf> {
                     .any(|component| component.as_os_str() == std::ffi::OsStr::new("subagents"))
         })
         .collect()
+}
+
+/// Find every transcript JSONL under a root, including subagent transcripts.
+///
+/// Unlike [`transcript_files_under`], which skips `subagents/` directories so
+/// `sync` can recurse into them per-parent-session, the scan path wants every
+/// JSONL in one pass.
+pub fn all_transcript_files_under(root: &Path) -> Vec<PathBuf> {
+    walkdir::WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .map(walkdir::DirEntry::into_path)
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("jsonl"))
+        .collect()
+}
+
+/// Whether a transcript path lives inside a `subagents/` directory.
+pub fn is_subagent_transcript(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str() == std::ffi::OsStr::new("subagents"))
 }

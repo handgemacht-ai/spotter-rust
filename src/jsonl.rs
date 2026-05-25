@@ -256,6 +256,16 @@ struct RawTopLevel {
     attribution_skill: Option<Value>,
     #[serde(rename = "attributionAgent")]
     attribution_agent: Option<Value>,
+    #[serde(rename = "attributionMcpServer")]
+    attribution_mcp_server: Option<Value>,
+    #[serde(rename = "attributionMcpTool")]
+    attribution_mcp_tool: Option<Value>,
+    #[serde(rename = "bridgeSessionId")]
+    bridge_session_id: Option<Value>,
+    #[serde(rename = "interruptedMessageId")]
+    interrupted_message_id: Option<Value>,
+    #[serde(rename = "lastSequenceNum")]
+    last_sequence_num: Option<Value>,
     #[serde(rename = "mcpMeta")]
     mcp_meta: Option<Value>,
     #[serde(rename = "apiErrorStatus")]
@@ -788,6 +798,11 @@ const TOP_LEVEL_FIELDS: &[&str] = &[
     "attributionPlugin",
     "attributionSkill",
     "attributionAgent",
+    "attributionMcpServer",
+    "attributionMcpTool",
+    "bridgeSessionId",
+    "interruptedMessageId",
+    "lastSequenceNum",
     "mcpMeta",
     "apiErrorStatus",
     "agentSetting",

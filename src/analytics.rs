@@ -738,7 +738,11 @@ impl RunFilters {
     }
 }
 
-fn filter_runs(runs: Vec<ToolCallRun>, filters: &RunFilters) -> Vec<ToolCallRun> {
+/// Apply the standard run-filter set in-place.
+///
+/// Exposed so the DB-less `scan` path can reuse the same predicate the
+/// DB-backed `search` path uses.
+pub fn filter_runs(runs: Vec<ToolCallRun>, filters: &RunFilters) -> Vec<ToolCallRun> {
     runs.into_iter()
         .filter(|run| {
             filters

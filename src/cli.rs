@@ -28,6 +28,7 @@ pub fn run() -> Result<()> {
         Command::Transcripts(command) => run_transcripts(command, db_path, config, &cancel),
         Command::Projects(command) => run_projects(command, config_path, config),
         Command::Init(args) => init(args, config_path),
+        Command::Scan(args) => scan(args, &config, &cancel),
     }
 }
 
@@ -72,6 +73,8 @@ enum Command {
     Projects(ProjectsCommand),
     /// Create a starter config from Claude Code projects.
     Init(InitArgs),
+    /// Query JSONL transcripts directly, without the SQLite DB.
+    Scan(ScanArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -401,6 +404,57 @@ struct ProjectAliasArgs {
 
     /// New alias.
     new_alias: String,
+}
+
+#[derive(Debug, Args)]
+struct ScanArgs {
+    /// Scan a specific JSONL transcript file. Repeatable.
+    #[arg(long)]
+    file: Vec<PathBuf>,
+
+    /// Scan every JSONL under a transcript root, including subagents. Repeatable.
+    #[arg(long)]
+    root: Vec<PathBuf>,
+
+    /// Skip subagent transcripts when walking roots.
+    #[arg(long)]
+    no_subagents: bool,
+
+    /// Filter by session id (matches external session id, internal id, or parent).
+    #[arg(long)]
+    session: Option<String>,
+
+    /// Filter by tool name.
+    #[arg(long)]
+    tool: Option<String>,
+
+    /// Filter Bash commands containing text.
+    #[arg(long)]
+    command_contains: Option<String>,
+
+    /// Filter errors containing text.
+    #[arg(long)]
+    error_contains: Option<String>,
+
+    /// Match file paths touched or referenced by the tool call.
+    #[arg(long)]
+    file_path: Option<String>,
+
+    /// Filter by status (`completed`, `error`, `ongoing`, `orphan`).
+    #[arg(long)]
+    status: Option<String>,
+
+    /// Max results.
+    #[arg(long, default_value_t = 50)]
+    limit: usize,
+
+    /// Output format: table or json.
+    #[arg(long, default_value = "table")]
+    format: String,
+
+    /// Aggregate rows per session.
+    #[arg(long)]
+    group_by_session: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1042,6 +1096,120 @@ fn search(args: SearchArgs, db_path: PathBuf) -> Result<()> {
     } else {
         output(&runs, &args.format, || print_runs(&runs))
     }
+}
+
+fn scan(args: ScanArgs, config: &Config, cancel: &AtomicBool) -> Result<()> {
+    let targets = collect_scan_targets(&args, config);
+    if targets.is_empty() {
+        anyhow::bail!(
+            "no transcripts to scan: provide --file/--root, configure transcript_roots, or ensure ~/.claude/projects or ~/.claude_agents/projects exists"
+        );
+    }
+
+    let filters = analytics::RunFilters {
+        session: args.session.clone(),
+        tool: args.tool.clone(),
+        command_contains: args.command_contains.clone(),
+        error_contains: args.error_contains.clone(),
+        file_path: args.file_path.clone(),
+        status: args.status.clone(),
+        limit: Some(args.limit),
+        ..analytics::RunFilters::default()
+    };
+
+    let mut runs: Vec<db::ToolCallRun> = Vec::new();
+    let mut errors: Vec<(PathBuf, anyhow::Error)> = Vec::new();
+
+    for file in targets {
+        check_cancelled(cancel)?;
+        let subagent = db::is_subagent_transcript(&file);
+        let parsed = if subagent {
+            jsonl::parse_subagent_file(&file)
+        } else {
+            jsonl::parse_session_file(&file)
+        };
+        let parsed = match parsed {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                errors.push((file, anyhow::Error::new(error)));
+                continue;
+            }
+        };
+        let project_alias = config.alias_for_cwd(parsed.cwd.as_deref());
+        let session = match db::session_record_from_parsed(&parsed, &file, &project_alias, None) {
+            Ok(session) => session,
+            Err(error) => {
+                errors.push((file, error));
+                continue;
+            }
+        };
+        runs.extend(db::derive_runs(&parsed, &session));
+    }
+
+    let mut filtered = analytics::filter_runs(runs, &filters);
+    filtered.sort_by(|left, right| {
+        left.started_at
+            .as_deref()
+            .unwrap_or("")
+            .cmp(right.started_at.as_deref().unwrap_or(""))
+            .then_with(|| left.start_ordinal.cmp(&right.start_ordinal))
+            .then_with(|| left.tool_use_id.cmp(&right.tool_use_id))
+    });
+    filtered.truncate(args.limit);
+
+    let print_result = if args.group_by_session {
+        let groups = group_runs_by_session(&filtered);
+        output(&groups, &args.format, || print_session_groups(&groups))
+    } else {
+        output(&filtered, &args.format, || print_runs(&filtered))
+    };
+
+    for (path, error) in &errors {
+        eprintln!("Skipped {}: {:#}", path.display(), error);
+    }
+
+    print_result
+}
+
+fn collect_scan_targets(args: &ScanArgs, config: &Config) -> Vec<PathBuf> {
+    let mut targets = Vec::new();
+    for path in &args.file {
+        targets.push(path.clone());
+    }
+    let mut roots = args.root.clone();
+    if args.file.is_empty() && args.root.is_empty() {
+        roots.extend(default_scan_roots(config));
+    }
+    for root in roots {
+        let files = if args.no_subagents {
+            db::transcript_files_under(&root)
+        } else {
+            db::all_transcript_files_under(&root)
+        };
+        targets.extend(files);
+    }
+    targets.sort();
+    targets.dedup();
+    targets
+}
+
+fn default_scan_roots(config: &Config) -> Vec<PathBuf> {
+    if !config.transcript_roots.is_empty() {
+        return config.transcript_roots.clone();
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut roots = Vec::new();
+    if let Some(home) = home {
+        for candidate in [
+            home.join(".claude").join("projects"),
+            home.join(".claude_agents").join("projects"),
+        ] {
+            if candidate.exists() {
+                roots.push(candidate);
+            }
+        }
+    }
+    roots
 }
 
 #[derive(Debug, Serialize)]
