@@ -37,3 +37,4 @@ pub mod config;
 pub mod db;
 pub mod jsonl;
 pub mod paths;
+pub mod scan;

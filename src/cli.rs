@@ -14,7 +14,7 @@ use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 use signal_hook::{consts::SIGINT, flag};
 
-use crate::{analytics, config::Config, db, jsonl, paths};
+use crate::{analytics, config::Config, db, jsonl, paths, scan};
 
 /// Run the Spotter CLI.
 pub fn run() -> Result<()> {
@@ -28,7 +28,7 @@ pub fn run() -> Result<()> {
         Command::Transcripts(command) => run_transcripts(command, db_path, config, &cancel),
         Command::Projects(command) => run_projects(command, config_path, config),
         Command::Init(args) => init(args, config_path),
-        Command::Scan(args) => scan(args, &config, &cancel),
+        Command::Scan(command) => run_scan(command, &config, &cancel),
     }
 }
 
@@ -74,7 +74,7 @@ enum Command {
     /// Create a starter config from Claude Code projects.
     Init(InitArgs),
     /// Query JSONL transcripts directly, without the SQLite DB.
-    Scan(ScanArgs),
+    Scan(ScanCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -406,19 +406,53 @@ struct ProjectAliasArgs {
     new_alias: String,
 }
 
-#[derive(Debug, Args)]
-struct ScanArgs {
+#[derive(Debug, Parser)]
+struct ScanCommand {
     /// Scan a specific JSONL transcript file. Repeatable.
-    #[arg(long)]
+    #[arg(long, global = true)]
     file: Vec<PathBuf>,
 
     /// Scan every JSONL under a transcript root, including subagents. Repeatable.
-    #[arg(long)]
+    #[arg(long, global = true)]
     root: Vec<PathBuf>,
 
     /// Skip subagent transcripts when walking roots.
-    #[arg(long)]
+    #[arg(long, global = true)]
     no_subagents: bool,
+
+    #[command(subcommand)]
+    command: Option<ScanSubcommand>,
+}
+
+#[derive(Debug, Subcommand)]
+enum ScanSubcommand {
+    /// Search tool call runs and transcript content.
+    Search(ScanSearchArgs),
+    /// Inspect tool call runs for a specific session.
+    Inspect(InspectArgs),
+    /// Compare tool runs between session cohorts.
+    Compare(CompareArgs),
+    /// Aggregate tool usage across sessions.
+    Aggregate(AggregateArgs),
+    /// Audit transcript completeness.
+    Audit(ScanAuditArgs),
+    /// Analyze tool call errors.
+    Errors(ErrorsArgs),
+    /// Analyze transcript token health.
+    Health(HealthArgs),
+    /// Find tool call patterns and retries.
+    Sequences(SequencesArgs),
+}
+
+#[derive(Debug, Args)]
+struct ScanSearchArgs {
+    /// Filter by project alias.
+    #[arg(long)]
+    project: Option<String>,
+
+    /// Filter by worktree name.
+    #[arg(long)]
+    worktree: Option<String>,
 
     /// Filter by session id (matches external session id, internal id, or parent).
     #[arg(long)]
@@ -440,9 +474,25 @@ struct ScanArgs {
     #[arg(long)]
     file_path: Option<String>,
 
+    /// Search transcript message content (substring, case-insensitive).
+    #[arg(long)]
+    content_contains: Option<String>,
+
+    /// Minimum duration in milliseconds.
+    #[arg(long)]
+    min_duration: Option<i64>,
+
+    /// Maximum duration in milliseconds.
+    #[arg(long)]
+    max_duration: Option<i64>,
+
     /// Filter by status (`completed`, `error`, `ongoing`, `orphan`).
     #[arg(long)]
     status: Option<String>,
+
+    /// Only sessions/runs after this date or timestamp.
+    #[arg(long)]
+    since: Option<String>,
 
     /// Max results.
     #[arg(long, default_value_t = 50)]
@@ -455,6 +505,17 @@ struct ScanArgs {
     /// Aggregate rows per session.
     #[arg(long)]
     group_by_session: bool,
+}
+
+#[derive(Debug, Args)]
+struct ScanAuditArgs {
+    /// Max files to audit when walking roots.
+    #[arg(long, default_value_t = 20)]
+    limit: usize,
+
+    /// Output format: table or json.
+    #[arg(long, default_value = "table")]
+    format: String,
 }
 
 #[derive(Debug, Args)]
@@ -1098,56 +1159,94 @@ fn search(args: SearchArgs, db_path: PathBuf) -> Result<()> {
     }
 }
 
-fn scan(args: ScanArgs, config: &Config, cancel: &AtomicBool) -> Result<()> {
-    let targets = collect_scan_targets(&args, config);
+fn run_scan(command: ScanCommand, config: &Config, cancel: &AtomicBool) -> Result<()> {
+    let ScanCommand {
+        file,
+        root,
+        no_subagents,
+        command,
+    } = command;
+    let Some(command) = command else {
+        print_scan_index();
+        return Ok(());
+    };
+
+    let targets = scan::collect_targets(&file, &root, no_subagents, config);
     if targets.is_empty() {
         anyhow::bail!(
             "no transcripts to scan: provide --file/--root, configure transcript_roots, or ensure ~/.claude/projects or ~/.claude_agents/projects exists"
         );
     }
 
-    let filters = analytics::RunFilters {
-        session: args.session.clone(),
-        tool: args.tool.clone(),
-        command_contains: args.command_contains.clone(),
-        error_contains: args.error_contains.clone(),
-        file_path: args.file_path.clone(),
-        status: args.status.clone(),
-        limit: Some(args.limit),
-        ..analytics::RunFilters::default()
-    };
+    match command {
+        ScanSubcommand::Search(args) => scan_search(args, &targets, config, cancel),
+        ScanSubcommand::Inspect(args) => scan_inspect(args, &targets, config, cancel),
+        ScanSubcommand::Compare(args) => scan_compare(args, &targets, config, cancel),
+        ScanSubcommand::Aggregate(args) => scan_aggregate(args, &targets, config, cancel),
+        ScanSubcommand::Audit(args) => scan_audit(args, &targets),
+        ScanSubcommand::Errors(args) => scan_errors(args, &targets, config, cancel),
+        ScanSubcommand::Health(args) => scan_health(args, &targets, config, cancel),
+        ScanSubcommand::Sequences(args) => scan_sequences(args, &targets, config, cancel),
+    }
+}
 
-    let mut runs: Vec<db::ToolCallRun> = Vec::new();
-    let mut errors: Vec<(PathBuf, anyhow::Error)> = Vec::new();
+fn load_scan_store(
+    targets: &[PathBuf],
+    config: &Config,
+    cancel: &AtomicBool,
+) -> Result<scan::Store> {
+    let store = scan::load(targets, config, cancel)?;
+    for (path, error) in &store.errors {
+        eprintln!("Skipped {}: {:#}", path.display(), error);
+    }
+    Ok(store)
+}
 
-    for file in targets {
-        check_cancelled(cancel)?;
-        let subagent = db::is_subagent_transcript(&file);
-        let parsed = if subagent {
-            jsonl::parse_subagent_file(&file)
-        } else {
-            jsonl::parse_session_file(&file)
-        };
-        let parsed = match parsed {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                errors.push((file, anyhow::Error::new(error)));
-                continue;
+fn scan_search(
+    args: ScanSearchArgs,
+    targets: &[PathBuf],
+    config: &Config,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let store = load_scan_store(targets, config, cancel)?;
+
+    if let Some(content) = args.content_contains.as_deref() {
+        let hits = analytics::search_content_in(&store.messages, content, args.limit);
+        return output(&hits, &args.format, || {
+            if hits.is_empty() {
+                println!("No results found.");
+            } else {
+                println!("session_id | ordinal | role | snippet");
+                println!("-------------------------------------");
+                for hit in &hits {
+                    println!(
+                        "{} | {} | {} | {}",
+                        hit.external_session_id,
+                        hit.ordinal,
+                        hit.role.as_deref().unwrap_or("n/a"),
+                        hit.snippet.replace('\n', " ")
+                    );
+                }
             }
-        };
-        let project_alias = config.alias_for_cwd(parsed.cwd.as_deref());
-        let session = match db::session_record_from_parsed(&parsed, &file, &project_alias, None) {
-            Ok(session) => session,
-            Err(error) => {
-                errors.push((file, error));
-                continue;
-            }
-        };
-        runs.extend(db::derive_runs(&parsed, &session));
+        });
     }
 
-    let mut filtered = analytics::filter_runs(runs, &filters);
-    filtered.sort_by(|left, right| {
+    let filters = analytics::RunFilters {
+        project: args.project,
+        worktree: args.worktree,
+        session: args.session,
+        tool: args.tool,
+        command_contains: args.command_contains,
+        error_contains: args.error_contains,
+        file_path: args.file_path,
+        min_duration: args.min_duration,
+        max_duration: args.max_duration,
+        status: args.status,
+        since: args.since,
+        limit: Some(args.limit),
+    };
+    let mut runs = analytics::search_runs_in(store.runs, &filters);
+    runs.sort_by(|left, right| {
         left.started_at
             .as_deref()
             .unwrap_or("")
@@ -1155,61 +1254,196 @@ fn scan(args: ScanArgs, config: &Config, cancel: &AtomicBool) -> Result<()> {
             .then_with(|| left.start_ordinal.cmp(&right.start_ordinal))
             .then_with(|| left.tool_use_id.cmp(&right.tool_use_id))
     });
-    filtered.truncate(args.limit);
 
-    let print_result = if args.group_by_session {
-        let groups = group_runs_by_session(&filtered);
+    if args.group_by_session {
+        let groups = group_runs_by_session(&runs);
         output(&groups, &args.format, || print_session_groups(&groups))
     } else {
-        output(&filtered, &args.format, || print_runs(&filtered))
+        output(&runs, &args.format, || print_runs(&runs))
+    }
+}
+
+fn scan_inspect(
+    args: InspectArgs,
+    targets: &[PathBuf],
+    config: &Config,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let store = load_scan_store(targets, config, cancel)?;
+    let session = store
+        .find_session(&args.session)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("Session not found: {}", args.session))?;
+    let runs = analytics::inspect_runs_in(
+        &session,
+        store.runs.clone(),
+        args.tool_use_id.as_deref(),
+        args.status.as_deref(),
+        args.context,
+    );
+    if args.with_messages {
+        let context = analytics::message_context_in(&store.messages, &runs);
+        let payload = InspectWithMessages { runs, context };
+        output(&payload, &args.format, || {
+            print_inspect_with_messages(&payload)
+        })
+    } else {
+        output(&runs, &args.format, || print_inspect_runs(&runs))
+    }
+}
+
+fn scan_compare(
+    args: CompareArgs,
+    targets: &[PathBuf],
+    config: &Config,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let store = load_scan_store(targets, config, cancel)?;
+    let filters = analytics::RunFilters {
+        tool: args.tool,
+        command_contains: args.command_contains,
+        ..analytics::RunFilters::default()
     };
-
-    for (path, error) in &errors {
-        eprintln!("Skipped {}: {:#}", path.display(), error);
-    }
-
-    print_result
+    let result = analytics::compare_in(
+        store.runs,
+        &args.left_session,
+        &args.right_session,
+        &filters,
+        &args.group_by,
+    );
+    output(&result, &args.format, || {
+        println!("Left cohort:");
+        print_compare_groups(&result.left);
+        println!("\nRight cohort:");
+        print_compare_groups(&result.right);
+    })
 }
 
-fn collect_scan_targets(args: &ScanArgs, config: &Config) -> Vec<PathBuf> {
-    let mut targets = Vec::new();
-    for path in &args.file {
-        targets.push(path.clone());
-    }
-    let mut roots = args.root.clone();
-    if args.file.is_empty() && args.root.is_empty() {
-        roots.extend(default_scan_roots(config));
-    }
-    for root in roots {
-        let files = if args.no_subagents {
-            db::transcript_files_under(&root)
-        } else {
-            db::all_transcript_files_under(&root)
-        };
-        targets.extend(files);
-    }
-    targets.sort();
-    targets.dedup();
-    targets
+fn scan_aggregate(
+    args: AggregateArgs,
+    targets: &[PathBuf],
+    config: &Config,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let store = load_scan_store(targets, config, cancel)?;
+    let filters = analytics::RunFilters {
+        project: args.project,
+        since: args.since,
+        tool: args.tool,
+        ..analytics::RunFilters::default()
+    };
+    let group_by = args
+        .group_by
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let result = analytics::aggregate_in(store.runs, &filters, &group_by);
+    output(&result, &args.format, || print_aggregate(&result))
 }
 
-fn default_scan_roots(config: &Config) -> Vec<PathBuf> {
-    if !config.transcript_roots.is_empty() {
-        return config.transcript_roots.clone();
+fn scan_audit(args: ScanAuditArgs, targets: &[PathBuf]) -> Result<()> {
+    let mut reports = Vec::new();
+    for path in targets.iter().take(args.limit) {
+        reports.push(scan::audit_file(path)?);
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let mut roots = Vec::new();
-    if let Some(home) = home {
-        for candidate in [
-            home.join(".claude").join("projects"),
-            home.join(".claude_agents").join("projects"),
-        ] {
-            if candidate.exists() {
-                roots.push(candidate);
-            }
+    output(&reports, &args.format, || print_scan_audit_reports(&reports))
+}
+
+fn scan_errors(
+    args: ErrorsArgs,
+    targets: &[PathBuf],
+    config: &Config,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let store = load_scan_store(targets, config, cancel)?;
+    let filters = analytics::RunFilters {
+        project: args.project,
+        session: args.session,
+        since: args.since,
+        tool: args.tool,
+        ..analytics::RunFilters::default()
+    };
+    let result = analytics::error_analysis_in(store.runs, &filters, args.top, args.classify);
+    output(&result, &args.format, || {
+        print_errors(&result, args.classify)
+    })
+}
+
+fn scan_health(
+    args: HealthArgs,
+    targets: &[PathBuf],
+    config: &Config,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let store = load_scan_store(targets, config, cancel)?;
+    if let Some(session_id) = args.session {
+        let session = store
+            .find_session(&session_id)
+            .ok_or_else(|| anyhow::anyhow!("Session not found: {session_id}"))?;
+        let usage = store
+            .usage_by_session
+            .iter()
+            .find(|(record, _)| record.id == session.id)
+            .map(|(_, messages)| messages.as_slice())
+            .unwrap_or(&[]);
+        let report = analytics::health_session_in(usage);
+        output(&report, &args.format, || {
+            print_health_report(&session_id, &report)
+        })
+    } else {
+        let report = analytics::health_project_in(
+            store.usage_by_session,
+            args.project.as_deref(),
+            args.since.as_deref(),
+            args.limit,
+        );
+        output(&report, &args.format, || print_project_health(&report))
+    }
+}
+
+fn scan_sequences(
+    args: SequencesArgs,
+    targets: &[PathBuf],
+    config: &Config,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let store = load_scan_store(targets, config, cancel)?;
+    let filters = analytics::RunFilters {
+        project: args.project,
+        since: args.since,
+        ..analytics::RunFilters::default()
+    };
+    let result = analytics::sequence_analysis_in(
+        store.runs,
+        &filters,
+        args.min_length,
+        args.max_length,
+        args.min_occurrences,
+        args.recovery,
+    );
+    output(&result, &args.format, || print_sequences(&result))
+}
+
+fn print_scan_audit_reports(reports: &[scan::AuditFileReport]) {
+    for report in reports {
+        println!("Session: {}", report.session_id);
+        println!("  File: {}", report.file);
+        println!("  JSONL lines:       {}", report.jsonl_lines);
+        println!("  Parsed messages:   {}", report.parsed_messages);
+        println!();
+        println!("  JSONL types:");
+        for (record_type, count) in &report.jsonl_types {
+            println!("    {record_type:<25} {count}");
         }
     }
-    roots
+}
+
+fn print_scan_index() {
+    println!(
+        "Spotter Scan (DB-less) CLI\n\nCommands:\n\n  spotter scan search      Search tool call runs and transcript content\n  spotter scan inspect     Inspect tool call runs for a specific session\n  spotter scan compare     Compare tool runs between session cohorts\n  spotter scan aggregate   Aggregate tool usage across sessions\n  spotter scan audit       Audit transcript JSONL completeness\n  spotter scan errors      Analyze tool call errors\n  spotter scan health      Analyze transcript token health\n  spotter scan sequences   Find tool call patterns and retries\n\nScan-level options (apply to every subcommand):\n  --file <path>      Scan a specific JSONL transcript (repeatable)\n  --root <path>      Scan every JSONL under a transcript root (repeatable)\n  --no-subagents     Skip subagent transcripts when walking roots"
+    );
 }
 
 #[derive(Debug, Serialize)]

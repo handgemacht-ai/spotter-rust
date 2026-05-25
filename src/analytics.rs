@@ -8,7 +8,8 @@ use regex::Regex;
 use rusqlite::{params, Connection};
 use serde::Serialize;
 
-use crate::db::{self, MessageHit, ToolCallRun};
+use crate::db::{self, MessageHit, SessionRecord, ToolCallRun};
+use crate::jsonl::TranscriptMessage;
 
 /// Common tool-call filters.
 #[derive(Debug, Default)]
@@ -320,16 +321,76 @@ pub struct RecoveryRow {
 
 /// Search tool-call runs.
 pub fn search_runs(conn: &Connection, filters: &RunFilters) -> Result<Vec<ToolCallRun>> {
-    let mut runs = filter_runs(db::list_runs(conn)?, filters);
+    Ok(search_runs_in(db::list_runs(conn)?, filters))
+}
+
+/// Search tool-call runs against an already-loaded set.
+pub fn search_runs_in(runs: Vec<ToolCallRun>, filters: &RunFilters) -> Vec<ToolCallRun> {
+    let mut runs = filter_runs(runs, filters);
     if let Some(limit) = filters.limit {
         runs.truncate(limit);
     }
-    Ok(runs)
+    runs
 }
 
 /// Search transcript message content.
 pub fn search_content(conn: &Connection, text: &str, limit: usize) -> Result<Vec<MessageHit>> {
     db::search_messages(conn, text, limit)
+}
+
+/// Search transcript message content against an in-memory store.
+///
+/// Mirrors the DB FTS path's contract (case-insensitive substring, snippets
+/// capped at 180 chars) so callers can swap between the two and get
+/// comparable hits.
+pub fn search_content_in(messages: &[StoredMessage], text: &str, limit: usize) -> Vec<MessageHit> {
+    let needle = text.trim().to_lowercase();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    let mut hits = Vec::new();
+    for message in messages {
+        if message.search_text.to_lowercase().contains(&needle) {
+            hits.push(MessageHit {
+                session_id: message.session_id.clone(),
+                external_session_id: message.external_session_id.clone(),
+                project_alias: message.project_alias.clone(),
+                ordinal: message.ordinal,
+                record_type: message.record_type.clone(),
+                role: message.role.clone(),
+                timestamp: message.timestamp.clone(),
+                snippet: truncate_chars(&message.search_text, 180),
+            });
+            if hits.len() >= limit {
+                break;
+            }
+        }
+    }
+    hits
+}
+
+/// A normalized message kept in-memory by the scan path.
+///
+/// Mirrors what the SQLite messages table stores so the same analytics cores
+/// can run against either backing store.
+#[derive(Debug, Clone)]
+pub struct StoredMessage {
+    /// Internal session id.
+    pub session_id: String,
+    /// Claude Code session id.
+    pub external_session_id: String,
+    /// Project alias.
+    pub project_alias: String,
+    /// Message ordinal.
+    pub ordinal: i64,
+    /// Normalized record type.
+    pub record_type: String,
+    /// Message role.
+    pub role: Option<String>,
+    /// Timestamp.
+    pub timestamp: Option<String>,
+    /// Flattened text used by both substring search and inspection snippets.
+    pub search_text: String,
 }
 
 /// Inspect runs for a session.
@@ -342,7 +403,24 @@ pub fn inspect_runs(
 ) -> Result<Vec<ToolCallRun>> {
     let session = db::find_session(conn, session_id)?
         .ok_or_else(|| anyhow::anyhow!("Session not found: {session_id}"))?;
-    let mut runs = db::list_runs(conn)?
+    Ok(inspect_runs_in(
+        &session,
+        db::list_runs(conn)?,
+        tool_use_id,
+        status,
+        context,
+    ))
+}
+
+/// Inspect runs for a session given pre-loaded runs.
+pub fn inspect_runs_in(
+    session: &SessionRecord,
+    all_runs: Vec<ToolCallRun>,
+    tool_use_id: Option<&str>,
+    status: Option<&str>,
+    context: Option<usize>,
+) -> Vec<ToolCallRun> {
+    let mut runs = all_runs
         .into_iter()
         .filter(|run| {
             run.session_id == session.id
@@ -356,7 +434,7 @@ pub fn inspect_runs(
             .then_with(|| left.tool_use_id.cmp(&right.tool_use_id))
     });
 
-    let filtered = if let Some(tool_use_id) = tool_use_id {
+    if let Some(tool_use_id) = tool_use_id {
         context_window(
             &runs,
             |run| run.tool_use_id == tool_use_id,
@@ -372,34 +450,14 @@ pub fn inspect_runs(
         }
     } else {
         runs
-    };
-    Ok(filtered)
+    }
 }
 
 /// Load message context around inspected runs.
 pub fn message_context(conn: &Connection, runs: &[ToolCallRun]) -> Result<Vec<MessageHit>> {
-    let mut by_session = BTreeMap::<String, Vec<&ToolCallRun>>::new();
-    for run in runs {
-        by_session
-            .entry(run.session_id.clone())
-            .or_default()
-            .push(run);
-    }
-
+    let ranges = context_ranges(runs);
     let mut output = Vec::new();
-    for (session_id, session_runs) in by_session {
-        let min = session_runs
-            .iter()
-            .filter_map(|run| run.start_ordinal)
-            .map(|ordinal| ordinal.saturating_sub(1))
-            .min()
-            .unwrap_or(0);
-        let max = session_runs
-            .iter()
-            .flat_map(|run| [run.start_ordinal, run.end_ordinal])
-            .flatten()
-            .max()
-            .unwrap_or(min);
+    for (session_id, min, max) in ranges {
         output.extend(db::messages_between(conn, &session_id, min, max)?);
     }
     output.sort_by(|left, right| {
@@ -410,6 +468,66 @@ pub fn message_context(conn: &Connection, runs: &[ToolCallRun]) -> Result<Vec<Me
     Ok(output)
 }
 
+/// In-memory equivalent of [`message_context`]: pull messages that fall
+/// within ordinal windows around the given runs.
+pub fn message_context_in(messages: &[StoredMessage], runs: &[ToolCallRun]) -> Vec<MessageHit> {
+    let ranges = context_ranges(runs);
+    let mut output = Vec::new();
+    for (session_id, min, max) in &ranges {
+        for message in messages {
+            if &message.session_id == session_id
+                && message.ordinal >= *min
+                && message.ordinal <= *max
+            {
+                output.push(MessageHit {
+                    session_id: message.session_id.clone(),
+                    external_session_id: message.external_session_id.clone(),
+                    project_alias: message.project_alias.clone(),
+                    ordinal: message.ordinal,
+                    record_type: message.record_type.clone(),
+                    role: message.role.clone(),
+                    timestamp: message.timestamp.clone(),
+                    snippet: truncate_chars(&message.search_text, 240),
+                });
+            }
+        }
+    }
+    output.sort_by(|left, right| {
+        left.session_id
+            .cmp(&right.session_id)
+            .then_with(|| left.ordinal.cmp(&right.ordinal))
+    });
+    output
+}
+
+fn context_ranges(runs: &[ToolCallRun]) -> Vec<(String, i64, i64)> {
+    let mut by_session = BTreeMap::<String, Vec<&ToolCallRun>>::new();
+    for run in runs {
+        by_session
+            .entry(run.session_id.clone())
+            .or_default()
+            .push(run);
+    }
+    by_session
+        .into_iter()
+        .map(|(session_id, session_runs)| {
+            let min = session_runs
+                .iter()
+                .filter_map(|run| run.start_ordinal)
+                .map(|ordinal| ordinal.saturating_sub(1))
+                .min()
+                .unwrap_or(0);
+            let max = session_runs
+                .iter()
+                .flat_map(|run| [run.start_ordinal, run.end_ordinal])
+                .flatten()
+                .max()
+                .unwrap_or(min);
+            (session_id, min, max)
+        })
+        .collect()
+}
+
 /// Compare two session cohorts.
 pub fn compare(
     conn: &Connection,
@@ -418,13 +536,30 @@ pub fn compare(
     filters: &RunFilters,
     group_by: &str,
 ) -> Result<CompareResult> {
-    let runs = filter_runs(db::list_runs(conn)?, filters);
+    Ok(compare_in(
+        db::list_runs(conn)?,
+        left_sessions,
+        right_sessions,
+        filters,
+        group_by,
+    ))
+}
+
+/// Compare cohorts against an already-loaded set of runs.
+pub fn compare_in(
+    runs: Vec<ToolCallRun>,
+    left_sessions: &[String],
+    right_sessions: &[String],
+    filters: &RunFilters,
+    group_by: &str,
+) -> CompareResult {
+    let runs = filter_runs(runs, filters);
     let left = cohort_runs(&runs, left_sessions);
     let right = cohort_runs(&runs, right_sessions);
-    Ok(CompareResult {
+    CompareResult {
         left: compare_groups(&left, group_by),
         right: compare_groups(&right, group_by),
-    })
+    }
 }
 
 /// Aggregate runs.
@@ -433,7 +568,16 @@ pub fn aggregate(
     filters: &RunFilters,
     group_by: &[String],
 ) -> Result<AggregateResult> {
-    let runs = filter_runs(db::list_runs(conn)?, filters);
+    Ok(aggregate_in(db::list_runs(conn)?, filters, group_by))
+}
+
+/// Aggregate against an already-loaded set of runs.
+pub fn aggregate_in(
+    runs: Vec<ToolCallRun>,
+    filters: &RunFilters,
+    group_by: &[String],
+) -> AggregateResult {
+    let runs = filter_runs(runs, filters);
     let groups = aggregate_groups(&runs, group_by);
     let top_errors = top_errors(&runs, 10);
     let session_count = runs
@@ -441,12 +585,12 @@ pub fn aggregate(
         .map(|run| run.session_id.as_str())
         .collect::<std::collections::BTreeSet<_>>()
         .len();
-    Ok(AggregateResult {
+    AggregateResult {
         session_count,
         total_runs: runs.len(),
         groups,
         top_errors,
-    })
+    }
 }
 
 /// Analyze error patterns.
@@ -456,7 +600,16 @@ pub fn error_analysis(
     top: usize,
     classify: bool,
 ) -> Result<ErrorAnalysisResult> {
-    let all_runs = db::list_runs(conn)?;
+    Ok(error_analysis_in(db::list_runs(conn)?, filters, top, classify))
+}
+
+/// Analyze error patterns against an already-loaded set of runs.
+pub fn error_analysis_in(
+    all_runs: Vec<ToolCallRun>,
+    filters: &RunFilters,
+    top: usize,
+    classify: bool,
+) -> ErrorAnalysisResult {
     let total_tool_calls = filter_runs(all_runs.clone(), filters).len();
     let mut effective = RunFilters {
         status: Some("error".to_string()),
@@ -536,12 +689,12 @@ pub fn error_analysis(
     });
     let pattern_count = patterns.len();
     patterns.truncate(top);
-    Ok(ErrorAnalysisResult {
+    ErrorAnalysisResult {
         total_tool_calls,
         total_errors,
         pattern_count,
         patterns,
-    })
+    }
 }
 
 /// Analyze one session's token health.
@@ -549,7 +702,12 @@ pub fn health_session(conn: &Connection, session_id: &str) -> Result<HealthRepor
     let session = db::find_session(conn, session_id)?
         .ok_or_else(|| anyhow::anyhow!("Session not found: {session_id}"))?;
     let messages = usage_messages(conn, &session.id)?;
-    Ok(analyze_usage_messages(&messages))
+    Ok(health_session_in(&messages))
+}
+
+/// Analyze one session's token health from pre-loaded usage messages.
+pub fn health_session_in(messages: &[UsageMessage]) -> HealthReport {
+    analyze_usage_messages(messages)
 }
 
 /// Analyze project token health.
@@ -559,10 +717,26 @@ pub fn health_project(
     since: Option<&str>,
     limit: usize,
 ) -> Result<ProjectHealth> {
-    let sessions = db::list_sessions(conn)?
+    let sessions = db::list_sessions(conn)?;
+    let mut prepared = Vec::with_capacity(sessions.len());
+    for session in sessions {
+        let messages = usage_messages(conn, &session.id)?;
+        prepared.push((session, messages));
+    }
+    Ok(health_project_in(prepared, project, since, limit))
+}
+
+/// Analyze project token health from pre-loaded sessions and their usage messages.
+pub fn health_project_in(
+    sessions: Vec<(SessionRecord, Vec<UsageMessage>)>,
+    project: Option<&str>,
+    since: Option<&str>,
+    limit: usize,
+) -> ProjectHealth {
+    let sessions = sessions
         .into_iter()
-        .filter(|session| project.map_or(true, |project| session.project_alias == project))
-        .filter(|session| {
+        .filter(|(session, _)| project.map_or(true, |value| session.project_alias == value))
+        .filter(|(session, _)| {
             since.map_or(true, |since| {
                 session.started_at.as_deref().unwrap_or("") >= since
             })
@@ -571,8 +745,8 @@ pub fn health_project(
     let session_count = sessions.len();
 
     let mut rows = Vec::new();
-    for session in sessions {
-        let report = analyze_usage_messages(&usage_messages(conn, &session.id)?);
+    for (session, messages) in sessions {
+        let report = analyze_usage_messages(&messages);
         rows.push(ProjectHealthSession {
             session_id: session.external_session_id,
             project_alias: session.project_alias,
@@ -608,7 +782,7 @@ pub fn health_project(
         .max()
         .unwrap_or(0);
     rows.truncate(limit);
-    Ok(ProjectHealth {
+    ProjectHealth {
         session_count,
         total_cache_misses,
         total_jumps,
@@ -619,7 +793,7 @@ pub fn health_project(
         peak_cache_read_tokens,
         peak_cache_creation_tokens,
         sessions: rows,
-    })
+    }
 }
 
 /// Detect recurring sequences and retries.
@@ -631,7 +805,26 @@ pub fn sequence_analysis(
     min_occurrences: usize,
     recovery: bool,
 ) -> Result<SequenceResult> {
-    let runs = filter_runs(db::list_runs(conn)?, filters);
+    Ok(sequence_analysis_in(
+        db::list_runs(conn)?,
+        filters,
+        min_length,
+        max_length,
+        min_occurrences,
+        recovery,
+    ))
+}
+
+/// Detect recurring sequences and retries against pre-loaded runs.
+pub fn sequence_analysis_in(
+    all_runs: Vec<ToolCallRun>,
+    filters: &RunFilters,
+    min_length: usize,
+    max_length: usize,
+    min_occurrences: usize,
+    recovery: bool,
+) -> SequenceResult {
+    let runs = filter_runs(all_runs, filters);
     let mut sessions = BTreeMap::<String, Vec<ToolCallRun>>::new();
     for run in runs {
         sessions
@@ -711,12 +904,12 @@ pub fn sequence_analysis(
     retry_patterns.truncate(20);
 
     let recovery_stats = recovery.then(|| recovery_analysis(&sessions));
-    Ok(SequenceResult {
+    SequenceResult {
         session_count: sessions.len(),
         frequent_sequences,
         retry_patterns,
         recovery_stats,
-    })
+    }
 }
 
 impl RunFilters {
@@ -1034,16 +1227,43 @@ fn error_preventability(category: &str) -> String {
     .to_string()
 }
 
-#[derive(Debug)]
-struct UsageMessage {
-    ordinal: i64,
-    timestamp: Option<String>,
-    input_tokens: i64,
-    output_tokens: i64,
-    cache_read_input_tokens: i64,
-    cache_creation_input_tokens: i64,
-    model: Option<String>,
-    raw_payload: String,
+/// Per-message token usage row, shared by the DB-backed and in-memory health paths.
+#[derive(Debug, Clone)]
+pub struct UsageMessage {
+    /// Message ordinal.
+    pub ordinal: i64,
+    /// Timestamp.
+    pub timestamp: Option<String>,
+    /// Input tokens.
+    pub input_tokens: i64,
+    /// Output tokens.
+    pub output_tokens: i64,
+    /// Cache read input tokens.
+    pub cache_read_input_tokens: i64,
+    /// Cache creation input tokens.
+    pub cache_creation_input_tokens: i64,
+    /// Model name when present.
+    pub model: Option<String>,
+    /// Raw JSON payload as a string — used to sniff cache tier strings.
+    pub raw_payload: String,
+}
+
+impl UsageMessage {
+    /// Build a usage row from an in-memory transcript message, if it carries
+    /// token usage. Returns `None` for messages without `input_tokens`.
+    pub fn from_transcript_message(message: &TranscriptMessage) -> Option<Self> {
+        let input_tokens = message.input_tokens?;
+        Some(Self {
+            ordinal: message.ordinal,
+            timestamp: message.timestamp.map(|timestamp| timestamp.to_rfc3339()),
+            input_tokens,
+            output_tokens: message.output_tokens.unwrap_or(0),
+            cache_read_input_tokens: message.cache_read_input_tokens.unwrap_or(0),
+            cache_creation_input_tokens: message.cache_creation_input_tokens.unwrap_or(0),
+            model: message.model.clone(),
+            raw_payload: message.raw_payload.to_string(),
+        })
+    }
 }
 
 fn usage_messages(conn: &Connection, session_id: &str) -> Result<Vec<UsageMessage>> {

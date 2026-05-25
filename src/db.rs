@@ -1146,7 +1146,8 @@ fn command_fingerprint(command: &str) -> String {
     )
 }
 
-fn content_text(value: &Value) -> String {
+/// Flatten Claude Code content blocks into a single searchable string.
+pub fn content_text(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
         Value::Array(items) => items
@@ -1176,7 +1177,8 @@ fn worktree_name(cwd: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn truncate_chars(text: &str, max: usize) -> String {
+/// Truncate a string to `max` chars and append `...` when truncated.
+pub fn truncate_chars(text: &str, max: usize) -> String {
     let mut chars = text.chars();
     let truncated = chars.by_ref().take(max).collect::<String>();
     if chars.next().is_some() {
