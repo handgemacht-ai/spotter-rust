@@ -174,6 +174,7 @@ struct RawTopLevel {
     is_api_error_message: Option<Value>,
     #[serde(rename = "permissionMode")]
     permission_mode: Option<Value>,
+    mode: Option<Value>,
     #[serde(rename = "isCompactSummary")]
     is_compact_summary: Option<Value>,
     #[serde(rename = "isMeta")]
@@ -215,6 +216,10 @@ struct RawTopLevel {
     max_retries: Option<Value>,
     #[serde(rename = "messageCount")]
     message_count: Option<Value>,
+    #[serde(rename = "pendingBackgroundAgentCount")]
+    pending_background_agent_count: Option<Value>,
+    #[serde(rename = "pendingWorkflowCount")]
+    pending_workflow_count: Option<Value>,
     #[serde(rename = "preventedContinuation")]
     prevented_continuation: Option<Value>,
     #[serde(rename = "retryAttempt")]
@@ -714,6 +719,7 @@ fn normalize_type(raw_type: Option<&str>) -> &'static str {
         Some("last-prompt") => "last_prompt",
         Some("attachment") => "attachment",
         Some("permission-mode") => "permission_mode",
+        Some("mode") => "mode",
         Some("custom-title") => "custom_title",
         Some("ai-title") => "ai_title",
         Some("agent-setting") => "agent_setting",
@@ -752,6 +758,7 @@ const TOP_LEVEL_FIELDS: &[&str] = &[
     "apiError",
     "isApiErrorMessage",
     "permissionMode",
+    "mode",
     "isCompactSummary",
     "isMeta",
     "isVisibleInTranscriptOnly",
@@ -775,6 +782,8 @@ const TOP_LEVEL_FIELDS: &[&str] = &[
     "logicalParentUuid",
     "maxRetries",
     "messageCount",
+    "pendingBackgroundAgentCount",
+    "pendingWorkflowCount",
     "preventedContinuation",
     "retryAttempt",
     "retryInMs",
@@ -869,6 +878,38 @@ mod tests {
             .insert("sessionKind".to_string(), json!("bg"));
 
         let parsed = normalize_message(value, 0, "main", 1).expect("sessionKind should parse");
+
+        assert_eq!(parsed.session_id.as_deref(), Some("session-a"));
+    }
+
+    #[test]
+    fn accepts_newer_runtime_metadata_fields() {
+        let mode = normalize_message(
+            json!({
+                "type": "mode",
+                "mode": "normal",
+                "sessionId": "session-a"
+            }),
+            0,
+            "main",
+            1,
+        )
+        .expect("mode metadata should parse");
+        assert_eq!(mode.normalized_type, "mode");
+        assert_eq!(mode.session_id.as_deref(), Some("session-a"));
+
+        let mut value = base_message();
+        value
+            .as_object_mut()
+            .expect("object")
+            .insert("pendingBackgroundAgentCount".to_string(), json!(1));
+        value
+            .as_object_mut()
+            .expect("object")
+            .insert("pendingWorkflowCount".to_string(), json!(2));
+
+        let parsed =
+            normalize_message(value, 0, "main", 1).expect("pending runtime counters should parse");
 
         assert_eq!(parsed.session_id.as_deref(), Some("session-a"));
     }

@@ -1279,7 +1279,10 @@ pub fn all_transcript_files_under(root: &Path) -> Vec<PathBuf> {
         .filter_map(std::result::Result::ok)
         .filter(|entry| entry.file_type().is_file())
         .map(walkdir::DirEntry::into_path)
-        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("jsonl"))
+        .filter(|path| {
+            path.extension().and_then(|ext| ext.to_str()) == Some("jsonl")
+                && !is_workflow_journal(path)
+        })
         .collect()
 }
 
@@ -1287,4 +1290,41 @@ pub fn all_transcript_files_under(root: &Path) -> Vec<PathBuf> {
 pub fn is_subagent_transcript(path: &Path) -> bool {
     path.components()
         .any(|component| component.as_os_str() == std::ffi::OsStr::new("subagents"))
+}
+
+fn is_workflow_journal(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "journal.jsonl")
+        && path
+            .components()
+            .any(|component| component.as_os_str() == std::ffi::OsStr::new("workflows"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    #[test]
+    fn all_transcript_files_under_skips_workflow_journals() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let main = dir.path().join("session.jsonl");
+        let agent_dir = dir.path().join("session").join("subagents");
+        let agent = agent_dir.join("agent-a.jsonl");
+        let workflow_dir = agent_dir.join("workflows").join("wf_abc");
+        let journal = workflow_dir.join("journal.jsonl");
+
+        fs::create_dir_all(&workflow_dir).expect("workflow dir");
+        fs::write(&main, "{}\n").expect("main transcript");
+        fs::write(&agent, "{}\n").expect("agent transcript");
+        fs::write(&journal, "{}\n").expect("workflow journal");
+
+        let files = all_transcript_files_under(dir.path());
+
+        assert!(files.contains(&main));
+        assert!(files.contains(&agent));
+        assert!(!files.contains(&journal));
+    }
 }
