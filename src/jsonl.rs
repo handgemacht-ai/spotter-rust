@@ -186,6 +186,8 @@ struct RawTopLevel {
     plan_content: Option<Value>,
     #[serde(rename = "promptId")]
     prompt_id: Option<Value>,
+    #[serde(rename = "promptSource")]
+    prompt_source: Option<Value>,
     #[serde(rename = "sourceToolAssistantUUID")]
     source_tool_assistant_uuid: Option<Value>,
     #[serde(rename = "sourceToolUseID")]
@@ -765,6 +767,7 @@ const TOP_LEVEL_FIELDS: &[&str] = &[
     "origin",
     "planContent",
     "promptId",
+    "promptSource",
     "sourceToolAssistantUUID",
     "sourceToolUseID",
     "thinkingMetadata",
@@ -878,6 +881,19 @@ mod tests {
             .insert("sessionKind".to_string(), json!("bg"));
 
         let parsed = normalize_message(value, 0, "main", 1).expect("sessionKind should parse");
+
+        assert_eq!(parsed.session_id.as_deref(), Some("session-a"));
+    }
+
+    #[test]
+    fn accepts_prompt_source_metadata() {
+        let mut value = base_message();
+        value
+            .as_object_mut()
+            .expect("object")
+            .insert("promptSource".to_string(), json!("queue"));
+
+        let parsed = normalize_message(value, 0, "main", 1).expect("promptSource should parse");
 
         assert_eq!(parsed.session_id.as_deref(), Some("session-a"));
     }
