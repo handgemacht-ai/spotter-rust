@@ -10,6 +10,7 @@ use std::sync::{
 };
 
 use anyhow::{Context, Result};
+use chrono::Utc;
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 use signal_hook::{consts::SIGINT, flag};
@@ -442,6 +443,8 @@ enum ScanSubcommand {
     Health(HealthArgs),
     /// Find tool call patterns and retries.
     Sequences(SequencesArgs),
+    /// Score how often files are opened via the Read tool.
+    ReadScores(ReadScoresArgs),
 }
 
 #[derive(Debug, Args)]
@@ -515,6 +518,29 @@ struct ScanAuditArgs {
 
     /// Output format: table or json.
     #[arg(long, default_value = "table")]
+    format: String,
+}
+
+#[derive(Debug, Args)]
+struct ReadScoresArgs {
+    /// Recency half-life in days; a read this many days old counts half as much.
+    #[arg(long, default_value_t = 30.0)]
+    half_life_days: f64,
+
+    /// Only include file paths under this prefix (after worktree normalization).
+    #[arg(long)]
+    under: Option<String>,
+
+    /// Only include files with this extension, without the dot (e.g. `md`).
+    #[arg(long)]
+    ext: Option<String>,
+
+    /// Max files to emit, most-read first (0 = all).
+    #[arg(long, default_value_t = 0)]
+    limit: usize,
+
+    /// Output format: table or json.
+    #[arg(long, default_value = "json")]
     format: String,
 }
 
@@ -1187,6 +1213,7 @@ fn run_scan(command: ScanCommand, config: &Config, cancel: &AtomicBool) -> Resul
         ScanSubcommand::Errors(args) => scan_errors(args, &targets, config, cancel),
         ScanSubcommand::Health(args) => scan_health(args, &targets, config, cancel),
         ScanSubcommand::Sequences(args) => scan_sequences(args, &targets, config, cancel),
+        ScanSubcommand::ReadScores(args) => scan_read_scores(args, &targets, config, cancel),
     }
 }
 
@@ -1426,6 +1453,40 @@ fn scan_sequences(
     output(&result, &args.format, || print_sequences(&result))
 }
 
+fn scan_read_scores(
+    args: ReadScoresArgs,
+    targets: &[PathBuf],
+    config: &Config,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let store = load_scan_store(targets, config, cancel)?;
+    let options = analytics::ReadScoreOptions {
+        half_life_days: args.half_life_days,
+        under: args.under,
+        ext: args.ext,
+        now: Utc::now(),
+        limit: (args.limit > 0).then_some(args.limit),
+    };
+    let result = analytics::read_scores_in(store.runs, &options);
+    output(&result, &args.format, || print_read_scores(&result))
+}
+
+fn print_read_scores(result: &analytics::ReadScoreResult) {
+    println!(
+        "Read Scores ({} files, {} reads, {}-day half-life):\n",
+        result.file_count, result.total_reads, result.half_life_days
+    );
+    if result.files.is_empty() {
+        println!("No reads found.");
+        return;
+    }
+    println!("  score      reads   path");
+    println!("  ----------------------------------------------------------");
+    for file in &result.files {
+        println!("  {:<10} {:<7} {}", file.score, file.reads, file.path);
+    }
+}
+
 fn print_scan_audit_reports(reports: &[scan::AuditFileReport]) {
     for report in reports {
         println!("Session: {}", report.session_id);
@@ -1442,7 +1503,7 @@ fn print_scan_audit_reports(reports: &[scan::AuditFileReport]) {
 
 fn print_scan_index() {
     println!(
-        "Spotter Scan (DB-less) CLI\n\nCommands:\n\n  spotter scan search      Search tool call runs and transcript content\n  spotter scan inspect     Inspect tool call runs for a specific session\n  spotter scan compare     Compare tool runs between session cohorts\n  spotter scan aggregate   Aggregate tool usage across sessions\n  spotter scan audit       Audit transcript JSONL completeness\n  spotter scan errors      Analyze tool call errors\n  spotter scan health      Analyze transcript token health\n  spotter scan sequences   Find tool call patterns and retries\n\nScan-level options (apply to every subcommand):\n  --file <path>      Scan a specific JSONL transcript (repeatable)\n  --root <path>      Scan every JSONL under a transcript root (repeatable)\n  --no-subagents     Skip subagent transcripts when walking roots"
+        "Spotter Scan (DB-less) CLI\n\nCommands:\n\n  spotter scan search      Search tool call runs and transcript content\n  spotter scan inspect     Inspect tool call runs for a specific session\n  spotter scan compare     Compare tool runs between session cohorts\n  spotter scan aggregate   Aggregate tool usage across sessions\n  spotter scan audit       Audit transcript JSONL completeness\n  spotter scan errors      Analyze tool call errors\n  spotter scan health      Analyze transcript token health\n  spotter scan sequences   Find tool call patterns and retries\n  spotter scan read-scores Score how often files are opened via Read\n\nScan-level options (apply to every subcommand):\n  --file <path>      Scan a specific JSONL transcript (repeatable)\n  --root <path>      Scan every JSONL under a transcript root (repeatable)\n  --no-subagents     Skip subagent transcripts when walking roots"
     );
 }
 
