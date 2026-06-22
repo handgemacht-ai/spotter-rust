@@ -333,6 +333,140 @@ pub fn search_runs_in(runs: Vec<ToolCallRun>, filters: &RunFilters) -> Vec<ToolC
     runs
 }
 
+/// Options controlling per-file read-score computation.
+#[derive(Debug, Clone)]
+pub struct ReadScoreOptions {
+    /// Recency half-life in days: a read this many days old counts half as much.
+    pub half_life_days: f64,
+    /// Restrict to paths under this prefix, applied after worktree normalization.
+    pub under: Option<String>,
+    /// Restrict to files with this extension (without the dot, e.g. `md`).
+    pub ext: Option<String>,
+    /// Reference time used for recency decay.
+    pub now: DateTime<Utc>,
+    /// Maximum files to emit, highest score first.
+    pub limit: Option<usize>,
+}
+
+/// A single file's read score.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReadScore {
+    /// Canonical file path, with any worktree segment stripped.
+    pub path: String,
+    /// Recency-weighted read score.
+    pub score: f64,
+    /// Raw count of Read tool calls targeting the file.
+    pub reads: usize,
+    /// Most recent read timestamp, when known.
+    pub last_read: Option<String>,
+}
+
+/// Aggregate read-score output.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReadScoreResult {
+    /// Reference time the scores were computed against (RFC3339).
+    pub generated_at: String,
+    /// Recency half-life in days used for decay.
+    pub half_life_days: f64,
+    /// Total Read tool calls counted after filtering.
+    pub total_reads: usize,
+    /// Number of distinct files scored.
+    pub file_count: usize,
+    /// Per-file scores, highest first.
+    pub files: Vec<ReadScore>,
+}
+
+/// Fold a `/.claude/worktrees/<name>/` segment out of a path so reads taken in
+/// a worktree count toward the canonical main-checkout file.
+pub fn canonical_read_path(worktree_re: &Regex, path: &str) -> String {
+    worktree_re.replace_all(path, "/").into_owned()
+}
+
+/// Score how often each file is opened via the `Read` tool, weighting recent
+/// reads more heavily and folding worktree reads onto the canonical path.
+pub fn read_scores_in(runs: Vec<ToolCallRun>, opts: &ReadScoreOptions) -> ReadScoreResult {
+    let worktree_re = Regex::new(r"/\.claude/worktrees/[^/]+/").expect("valid worktree regex");
+    let ext_suffix = opts
+        .ext
+        .as_ref()
+        .map(|ext| format!(".{}", ext.trim_start_matches('.')));
+    let half_life = opts.half_life_days.max(f64::MIN_POSITIVE);
+
+    let mut acc: HashMap<String, (f64, usize, Option<String>)> = HashMap::new();
+    let mut total_reads = 0usize;
+
+    for run in runs.iter().filter(|run| run.tool_name == "Read") {
+        let weight = match run.started_at.as_deref().and_then(parse_timestamp) {
+            Some(timestamp) => {
+                let age_days =
+                    (opts.now - timestamp).num_seconds().max(0) as f64 / 86_400.0;
+                0.5f64.powf(age_days / half_life)
+            }
+            // No timestamp: still counts as a raw read, but adds nothing to the
+            // recency-weighted score rather than guessing an age.
+            None => 0.0,
+        };
+
+        for raw in &run.file_paths {
+            let path = canonical_read_path(&worktree_re, raw);
+            if let Some(under) = &opts.under {
+                if !path.starts_with(under) {
+                    continue;
+                }
+            }
+            if let Some(suffix) = &ext_suffix {
+                if !path.ends_with(suffix.as_str()) {
+                    continue;
+                }
+            }
+
+            total_reads += 1;
+            let entry = acc.entry(path).or_insert((0.0, 0, None));
+            entry.0 += weight;
+            entry.1 += 1;
+            if let Some(ts) = run.started_at.as_deref() {
+                let newer = match entry.2.as_deref() {
+                    Some(existing) => ts > existing,
+                    None => true,
+                };
+                if newer {
+                    entry.2 = Some(ts.to_string());
+                }
+            }
+        }
+    }
+
+    let mut files: Vec<ReadScore> = acc
+        .into_iter()
+        .map(|(path, (score, reads, last_read))| ReadScore {
+            path,
+            score: round2(score),
+            reads,
+            last_read,
+        })
+        .collect();
+    files.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| right.reads.cmp(&left.reads))
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    let file_count = files.len();
+    if let Some(limit) = opts.limit {
+        files.truncate(limit);
+    }
+
+    ReadScoreResult {
+        generated_at: opts.now.to_rfc3339(),
+        half_life_days: opts.half_life_days,
+        total_reads,
+        file_count,
+        files,
+    }
+}
+
 /// Search transcript message content.
 pub fn search_content(conn: &Connection, text: &str, limit: usize) -> Result<Vec<MessageHit>> {
     db::search_messages(conn, text, limit)
@@ -1763,6 +1897,53 @@ mod tests {
         assert!(normalize_error("/tmp/project/file 123").contains("<path>"));
         assert!(approx_eq(round1(1.24), 1.2));
         assert!(approx_eq(round2(1.235), 1.24));
+    }
+
+    #[test]
+    fn read_scores_fold_worktrees_and_weight_recency() {
+        use chrono::TimeZone;
+        let now = Utc.with_ymd_and_hms(2026, 6, 23, 0, 0, 0).unwrap();
+
+        let mut recent = run("toolu_recent", "Read", "completed", 1);
+        recent.file_paths = vec!["/srv/town/levio/.claude/worktrees/wt-a/README.md".to_string()];
+        recent.started_at = Some("2026-06-22T00:00:00Z".to_string()); // ~1 day old
+
+        let mut also_recent = run("toolu_recent2", "Read", "completed", 2);
+        also_recent.file_paths = vec!["/srv/town/levio/README.md".to_string()];
+        also_recent.started_at = Some("2026-06-21T00:00:00Z".to_string()); // ~2 days old
+
+        let mut old = run("toolu_old", "Read", "completed", 3);
+        old.file_paths = vec!["/srv/town/levio/OLD.md".to_string()];
+        old.started_at = Some("2026-01-01T00:00:00Z".to_string()); // months old
+
+        let mut non_md = run("toolu_code", "Read", "completed", 4);
+        non_md.file_paths = vec!["/srv/town/levio/src/main.rs".to_string()];
+
+        let mut a_write = run("toolu_write", "Edit", "completed", 5);
+        a_write.file_paths = vec!["/srv/town/levio/README.md".to_string()];
+
+        let opts = ReadScoreOptions {
+            half_life_days: 30.0,
+            under: Some("/srv/town/".to_string()),
+            ext: Some("md".to_string()),
+            now,
+            limit: None,
+        };
+        let result = read_scores_in(vec![recent, also_recent, old, non_md, a_write], &opts);
+
+        // Only .md files under the prefix: src/main.rs filtered out, the Edit ignored.
+        assert_eq!(result.file_count, 2);
+        assert_eq!(result.total_reads, 3);
+        // README read from a worktree and from the main checkout fold into one file.
+        let readme = result
+            .files
+            .iter()
+            .find(|file| file.path == "/srv/town/levio/README.md")
+            .expect("readme scored");
+        assert_eq!(readme.reads, 2);
+        // The recently-read README outranks the months-old doc.
+        assert_eq!(result.files[0].path, "/srv/town/levio/README.md");
+        assert!(result.files[0].score > result.files[1].score);
     }
 
     fn approx_eq(left: f64, right: f64) -> bool {
