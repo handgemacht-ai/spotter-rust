@@ -163,7 +163,7 @@ struct SearchArgs {
     #[arg(long)]
     max_duration: Option<i64>,
 
-    /// Keep only Read runs whose file has at least this many total lines.
+    /// Keep only Read runs that put at least this many lines into the transcript.
     #[arg(long)]
     min_read_lines: Option<i64>,
 
@@ -493,7 +493,7 @@ struct ScanSearchArgs {
     #[arg(long)]
     max_duration: Option<i64>,
 
-    /// Keep only Read runs whose file has at least this many total lines.
+    /// Keep only Read runs that put at least this many lines into the transcript.
     #[arg(long)]
     min_read_lines: Option<i64>,
 
@@ -1581,7 +1581,7 @@ fn print_runs(runs: &[db::ToolCallRun]) {
         return;
     }
 
-    println!("tool_use_id | tool_name | command | status | duration_ms | file_lines");
+    println!("tool_use_id | tool_name | command | status | duration_ms | lines_in_context");
     println!("------------------------------------------------------------------------");
     for run in runs {
         println!(
@@ -1592,16 +1592,20 @@ fn print_runs(runs: &[db::ToolCallRun]) {
             run.status,
             run.duration_ms
                 .map_or_else(|| "n/a".to_string(), |duration| duration.to_string()),
-            format_file_lines(run),
+            format_lines_in_context(run),
         );
     }
 }
 
-/// Render the file line count for a `Read` run, flagging token-cap truncation.
-fn format_file_lines(run: &db::ToolCallRun) -> String {
-    match run.read_total_lines {
-        Some(total) if run.read_truncated == Some(true) => format!("{total} (truncated)"),
-        Some(total) => total.to_string(),
+/// Render how many lines a `Read` run put into the transcript, noting when the
+/// file on disk was larger than what was actually read in.
+fn format_lines_in_context(run: &db::ToolCallRun) -> String {
+    match run.read_lines {
+        Some(lines) if run.read_truncated == Some(true) => match run.read_total_lines {
+            Some(total) => format!("{lines} of {total}"),
+            None => format!("{lines} (truncated)"),
+        },
+        Some(lines) => lines.to_string(),
         None => "-".to_string(),
     }
 }

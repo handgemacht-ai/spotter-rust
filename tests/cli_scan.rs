@@ -457,8 +457,9 @@ fn scan_search_reports_read_line_counts() {
     assert_eq!(trunc["read_truncated"], true);
 }
 
-/// `--min-read-lines` keeps reads of large files and drops small ones, judging
-/// by the file's true size so a token-cap-truncated read still qualifies.
+/// `--min-read-lines` keeps reads that put many lines into the transcript and
+/// drops the rest, judging by lines actually read in — so the huge but
+/// token-cap-truncated file (only 200 lines in context) is excluded.
 #[test]
 fn scan_search_filters_by_min_read_lines() {
     let (db, config) = temp_db_and_config();
@@ -486,5 +487,5 @@ fn scan_search_filters_by_min_read_lines() {
         .map(|run| run["tool_use_id"].as_str().unwrap())
         .collect();
     ids.sort_unstable();
-    assert_eq!(ids, vec!["toolu_read_big", "toolu_read_trunc"]);
+    assert_eq!(ids, vec!["toolu_read_big"]);
 }

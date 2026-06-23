@@ -1131,7 +1131,7 @@ pub fn filter_runs(runs: Vec<ToolCallRun>, filters: &RunFilters) -> Vec<ToolCall
         })
         .filter(|run| {
             filters.min_read_lines.map_or(true, |min| {
-                run.read_total_lines.map_or(false, |lines| lines >= min)
+                run.read_lines.map_or(false, |lines| lines >= min)
             })
         })
         .filter(|run| {
@@ -1741,8 +1741,8 @@ mod tests {
         second.command = None;
         second.input_summary = None;
         second.file_paths.clear();
-        second.read_total_lines = Some(1500);
-        second.read_lines = Some(200);
+        second.read_total_lines = Some(5000);
+        second.read_lines = Some(1200);
         second.read_truncated = Some(true);
 
         let runs = vec![first.clone(), second.clone()];
@@ -1763,9 +1763,9 @@ mod tests {
         };
         assert_eq!(filter_runs(runs.clone(), &filters).len(), 1);
 
-        // `min_read_lines` matches on the file's total size, so the partially
-        // read 1500-line file is kept even though only 200 lines were returned,
-        // and the non-Read run (no line metadata) is dropped.
+        // `min_read_lines` matches on the lines actually read into the transcript,
+        // so the 1200-line read is kept while the non-Read run (no line metadata)
+        // is dropped; a 2000 threshold drops it even though the file is 5000 lines.
         let big_reads = filter_runs(
             runs.clone(),
             &RunFilters {
