@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 
 use crate::jsonl::{content_blocks, ParsedSession, TranscriptMessage};
 
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 5;
 
 /// A stored transcript session.
 #[derive(Debug, Clone, Serialize)]
@@ -106,6 +106,17 @@ pub struct ToolCallRun {
     pub worktree_name: Option<String>,
     /// Canonical working directory.
     pub canonical_cwd: Option<String>,
+    /// Total line count of the file a `Read` returned, from the transcript's
+    /// `toolUseResult.file.totalLines`. This is the file's true size and is
+    /// unaffected by partial reads or token-cap truncation. `None` for runs
+    /// that are not file-returning reads.
+    pub read_total_lines: Option<i64>,
+    /// Lines actually returned into context by a `Read`
+    /// (`toolUseResult.file.numLines`); may be smaller than `read_total_lines`.
+    pub read_lines: Option<i64>,
+    /// Whether Claude Code auto-truncated the read at the token cap
+    /// (`toolUseResult.file.truncatedByTokenCap`).
+    pub read_truncated: Option<bool>,
 }
 
 /// A content search match.
@@ -172,7 +183,7 @@ pub fn canonical_content_hash(conn: &Connection) -> Result<String> {
         "SELECT alias, path FROM projects ORDER BY alias",
         "SELECT id, external_session_id, parent_session_id, is_subagent, agent_id, project_alias, transcript_path, cwd, slug, git_branch, version, started_at, ended_at, message_count FROM sessions ORDER BY id",
         "SELECT session_id, ordinal, uuid, parent_uuid, message_id, record_type, role, content, search_text, raw_payload, timestamp, is_sidechain, agent_id, tool_use_id, parent_tool_use_id, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, model FROM messages ORDER BY session_id, ordinal",
-        "SELECT tool_use_id, session_id, external_session_id, parent_session_id, is_subagent, agent_id, tool_name, command, command_program, command_args, command_fingerprint, input_summary, input_size, output_size, file_paths, status, started_at, finished_at, duration_ms, start_ordinal, end_ordinal, source_scope, error_content, project_alias, worktree_name, canonical_cwd FROM tool_call_runs ORDER BY session_id, tool_use_id",
+        "SELECT tool_use_id, session_id, external_session_id, parent_session_id, is_subagent, agent_id, tool_name, command, command_program, command_args, command_fingerprint, input_summary, input_size, output_size, file_paths, status, started_at, finished_at, duration_ms, start_ordinal, end_ordinal, source_scope, error_content, project_alias, worktree_name, canonical_cwd, read_total_lines, read_lines, read_truncated FROM tool_call_runs ORDER BY session_id, tool_use_id",
     ] {
         let mut stmt = conn.prepare(query)?;
         let column_count = stmt.column_count();
@@ -412,7 +423,7 @@ pub fn list_sessions(conn: &Connection) -> Result<Vec<SessionRecord>> {
 /// Load all tool call runs.
 pub fn list_runs(conn: &Connection) -> Result<Vec<ToolCallRun>> {
     let mut stmt = conn.prepare(
-        "SELECT tool_use_id, session_id, external_session_id, parent_session_id, is_subagent, agent_id, tool_name, command, command_program, command_args, command_fingerprint, input_summary, input_size, output_size, file_paths, status, started_at, finished_at, duration_ms, start_ordinal, end_ordinal, source_scope, error_content, project_alias, worktree_name, canonical_cwd \
+        "SELECT tool_use_id, session_id, external_session_id, parent_session_id, is_subagent, agent_id, tool_name, command, command_program, command_args, command_fingerprint, input_summary, input_size, output_size, file_paths, status, started_at, finished_at, duration_ms, start_ordinal, end_ordinal, source_scope, error_content, project_alias, worktree_name, canonical_cwd, read_total_lines, read_lines, read_truncated \
          FROM tool_call_runs ORDER BY COALESCE(started_at, ''), start_ordinal, tool_use_id",
     )?;
     let rows = stmt.query_map([], run_from_row)?;
@@ -594,6 +605,9 @@ fn migrate(conn: &Connection, path: &Path) -> Result<()> {
             project_alias TEXT NOT NULL,
             worktree_name TEXT,
             canonical_cwd TEXT,
+            read_total_lines INTEGER,
+            read_lines INTEGER,
+            read_truncated INTEGER,
             PRIMARY KEY(session_id, tool_use_id),
             FOREIGN KEY(session_id) REFERENCES sessions(id),
             FOREIGN KEY(project_alias) REFERENCES projects(alias)
@@ -609,7 +623,28 @@ fn migrate(conn: &Connection, path: &Path) -> Result<()> {
     )?;
     ensure_search_text_column(conn)?;
     ensure_tool_call_runs_session_key(conn)?;
-    conn.execute_batch("PRAGMA user_version = 4;")?;
+    ensure_read_line_columns(conn)?;
+    conn.execute_batch("PRAGMA user_version = 5;")?;
+    Ok(())
+}
+
+/// Add the `Read` line-count columns to `tool_call_runs` if an older database
+/// predates them. `CREATE TABLE IF NOT EXISTS` never alters an existing table,
+/// so migrated databases need this explicit backfill.
+fn ensure_read_line_columns(conn: &Connection) -> Result<()> {
+    let existing = conn
+        .prepare("PRAGMA table_info(tool_call_runs)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (column, ddl) in [
+        ("read_total_lines", "read_total_lines INTEGER"),
+        ("read_lines", "read_lines INTEGER"),
+        ("read_truncated", "read_truncated INTEGER"),
+    ] {
+        if !existing.iter().any(|name| name == column) {
+            conn.execute(&format!("ALTER TABLE tool_call_runs ADD COLUMN {ddl}"), [])?;
+        }
+    }
     Ok(())
 }
 
@@ -653,6 +688,9 @@ fn ensure_tool_call_runs_session_key(conn: &Connection) -> Result<()> {
             project_alias TEXT NOT NULL,
             worktree_name TEXT,
             canonical_cwd TEXT,
+            read_total_lines INTEGER,
+            read_lines INTEGER,
+            read_truncated INTEGER,
             PRIMARY KEY(session_id, tool_use_id),
             FOREIGN KEY(session_id) REFERENCES sessions(id),
             FOREIGN KEY(project_alias) REFERENCES projects(alias)
@@ -824,8 +862,8 @@ fn insert_message(conn: &Connection, session_id: &str, message: &TranscriptMessa
 
 fn insert_tool_call_run(conn: &Connection, run: &ToolCallRun) -> Result<()> {
     conn.execute(
-        "INSERT INTO tool_call_runs(tool_use_id, session_id, external_session_id, parent_session_id, is_subagent, agent_id, tool_name, command, command_program, command_args, command_fingerprint, input_summary, input_size, output_size, file_paths, status, started_at, finished_at, duration_ms, start_ordinal, end_ordinal, source_scope, error_content, project_alias, worktree_name, canonical_cwd) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
+        "INSERT INTO tool_call_runs(tool_use_id, session_id, external_session_id, parent_session_id, is_subagent, agent_id, tool_name, command, command_program, command_args, command_fingerprint, input_summary, input_size, output_size, file_paths, status, started_at, finished_at, duration_ms, start_ordinal, end_ordinal, source_scope, error_content, project_alias, worktree_name, canonical_cwd, read_total_lines, read_lines, read_truncated) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
         params![
             &run.tool_use_id,
             &run.session_id,
@@ -853,6 +891,9 @@ fn insert_tool_call_run(conn: &Connection, run: &ToolCallRun) -> Result<()> {
             &run.project_alias,
             &run.worktree_name,
             &run.canonical_cwd,
+            run.read_total_lines,
+            run.read_lines,
+            run.read_truncated,
         ],
     )?;
     Ok(())
@@ -977,6 +1018,9 @@ struct ToolResultInfo {
     output_size: Option<i64>,
     finished_at: Option<DateTime<Utc>>,
     end_ordinal: i64,
+    read_total_lines: Option<i64>,
+    read_lines: Option<i64>,
+    read_truncated: Option<bool>,
 }
 
 impl ToolResultInfo {
@@ -986,14 +1030,34 @@ impl ToolResultInfo {
             .get("is_error")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let file = read_result_file(&message.raw_payload);
         Self {
             is_error,
             error_content: is_error.then(|| truncate_chars(&content_text(content), 2_000)),
             output_size: Some(content.to_string().len() as i64),
             finished_at: message.timestamp,
             end_ordinal: message.ordinal,
+            read_total_lines: file
+                .and_then(|file| file.get("totalLines"))
+                .and_then(Value::as_i64),
+            read_lines: file
+                .and_then(|file| file.get("numLines"))
+                .and_then(Value::as_i64),
+            read_truncated: file
+                .and_then(|file| file.get("truncatedByTokenCap"))
+                .and_then(Value::as_bool),
         }
     }
+}
+
+/// The `toolUseResult.file` object Claude Code records for a `Read`.
+///
+/// It lives at the top level of the JSONL record (a sibling of `message`), so
+/// we read it from the raw payload rather than the `tool_result` content block.
+/// `totalLines` here is the file's true size even when the visible content was
+/// truncated, so callers can trust it over counting numbered lines in the body.
+fn read_result_file(raw_payload: &Value) -> Option<&Map<String, Value>> {
+    raw_payload.get("toolUseResult")?.get("file")?.as_object()
 }
 
 fn build_run(
@@ -1009,6 +1073,9 @@ fn build_run(
     };
     let finished_at = result.as_ref().and_then(|result| result.finished_at);
     let duration_ms = duration_ms(use_info.started_at, finished_at);
+    let read_total_lines = result.as_ref().and_then(|result| result.read_total_lines);
+    let read_lines = result.as_ref().and_then(|result| result.read_lines);
+    let read_truncated = result.as_ref().and_then(|result| result.read_truncated);
 
     ToolCallRun {
         tool_use_id,
@@ -1037,6 +1104,9 @@ fn build_run(
         project_alias: session.project_alias.clone(),
         worktree_name: session.cwd.as_deref().and_then(worktree_name),
         canonical_cwd: session.cwd.clone(),
+        read_total_lines,
+        read_lines,
+        read_truncated,
     }
 }
 
@@ -1072,6 +1142,9 @@ fn build_orphan_run(
         project_alias: session.project_alias.clone(),
         worktree_name: session.cwd.as_deref().and_then(worktree_name),
         canonical_cwd: session.cwd.clone(),
+        read_total_lines: None,
+        read_lines: None,
+        read_truncated: None,
     }
 }
 
@@ -1247,6 +1320,9 @@ fn run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ToolCallRun> {
         project_alias: row.get(23)?,
         worktree_name: row.get(24)?,
         canonical_cwd: row.get(25)?,
+        read_total_lines: row.get(26)?,
+        read_lines: row.get(27)?,
+        read_truncated: row.get(28)?,
     })
 }
 

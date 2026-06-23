@@ -42,6 +42,7 @@ seen.
 spotter scan --file session.jsonl search --tool Bash --limit 20
 spotter scan --root ~/.claude_agents/projects errors --classify
 spotter scan --file session.jsonl health --session <session-id>
+spotter scan --root ~/.claude/projects search --tool Read --min-read-lines 1000
 ```
 
 ### Target selection
@@ -56,7 +57,7 @@ root.
 
 | Subcommand                  | What it does                                                                    |
 |-----------------------------|---------------------------------------------------------------------------------|
-| `scan search`               | Filter tool-call runs by project/worktree/session/tool/command/error/file path, duration, status, since. `--content-contains` substring-matches transcript message content. `--group-by-session` aggregates rows. |
+| `scan search`               | Filter tool-call runs by project/worktree/session/tool/command/error/file path, duration, status, since. `--min-read-lines N` keeps only `Read` runs whose file has at least `N` total lines (from the transcript's recorded `totalLines`, so it counts the file's true size even when the read was truncated). `--content-contains` substring-matches transcript message content. `--group-by-session` aggregates rows. |
 | `scan inspect --session`    | Show tool-call runs for one session sorted by ordinal. `--tool-use-id`, `--status`, `--context`, `--with-messages` work the same as the DB path. |
 | `scan compare`              | Compare tool runs between two session cohorts (`--left-session`/`--right-session`, repeatable). |
 | `scan aggregate`            | Group tool usage by `tool_name`, `status`, etc. with counts, error rates, p50/p95 durations, top errors. |

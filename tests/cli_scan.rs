@@ -3,6 +3,7 @@ use predicates::prelude::*;
 use tempfile::NamedTempFile;
 
 const FIXTURE: &str = "tests/fixtures/transcripts/tool_heavy.jsonl";
+const LARGE_READS: &str = "tests/fixtures/large-reads/large_reads.jsonl";
 
 fn temp_db_and_config() -> (NamedTempFile, NamedTempFile) {
     (
@@ -420,4 +421,70 @@ fn scan_audit_reports_line_counts() {
     .success()
     .stdout(predicate::str::contains("jsonl_lines"))
     .stdout(predicate::str::contains("parsed_messages"));
+}
+
+/// `scan search` exposes the file line counts a `Read` recorded in the
+/// transcript, taken from `toolUseResult.file` rather than the visible body.
+#[test]
+fn scan_search_reports_read_line_counts() {
+    let (db, config) = temp_db_and_config();
+    let output = spotter(
+        &[
+            "scan",
+            "--file",
+            LARGE_READS,
+            "search",
+            "--tool",
+            "Read",
+            "--format",
+            "json",
+        ],
+        db.path().to_str().unwrap(),
+        config.path().to_str().unwrap(),
+    )
+    .success()
+    .get_output()
+    .stdout
+    .clone();
+    let runs: Vec<serde_json::Value> = serde_json::from_slice(&output).expect("valid json");
+    let trunc = runs
+        .iter()
+        .find(|run| run["tool_use_id"] == "toolu_read_trunc")
+        .expect("truncated read present");
+    // The file is 3000 lines even though only 200 were returned into context.
+    assert_eq!(trunc["read_total_lines"], 3000);
+    assert_eq!(trunc["read_lines"], 200);
+    assert_eq!(trunc["read_truncated"], true);
+}
+
+/// `--min-read-lines` keeps reads of large files and drops small ones, judging
+/// by the file's true size so a token-cap-truncated read still qualifies.
+#[test]
+fn scan_search_filters_by_min_read_lines() {
+    let (db, config) = temp_db_and_config();
+    let output = spotter(
+        &[
+            "scan",
+            "--file",
+            LARGE_READS,
+            "search",
+            "--min-read-lines",
+            "1000",
+            "--format",
+            "json",
+        ],
+        db.path().to_str().unwrap(),
+        config.path().to_str().unwrap(),
+    )
+    .success()
+    .get_output()
+    .stdout
+    .clone();
+    let runs: Vec<serde_json::Value> = serde_json::from_slice(&output).expect("valid json");
+    let mut ids: Vec<&str> = runs
+        .iter()
+        .map(|run| run["tool_use_id"].as_str().unwrap())
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec!["toolu_read_big", "toolu_read_trunc"]);
 }

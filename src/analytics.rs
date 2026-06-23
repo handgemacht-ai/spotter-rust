@@ -32,6 +32,8 @@ pub struct RunFilters {
     pub min_duration: Option<i64>,
     /// Maximum duration.
     pub max_duration: Option<i64>,
+    /// Keep only `Read` runs whose file has at least this many total lines.
+    pub min_read_lines: Option<i64>,
     /// Status filter.
     pub status: Option<String>,
     /// Lower bound timestamp or date.
@@ -1058,6 +1060,7 @@ impl RunFilters {
             file_path: self.file_path.clone(),
             min_duration: self.min_duration,
             max_duration: self.max_duration,
+            min_read_lines: self.min_read_lines,
             status: self.status.clone(),
             since: self.since.clone(),
             limit: None,
@@ -1125,6 +1128,11 @@ pub fn filter_runs(runs: Vec<ToolCallRun>, filters: &RunFilters) -> Vec<ToolCall
             filters
                 .max_duration
                 .map_or(true, |max| run.duration_ms.unwrap_or(0) <= max)
+        })
+        .filter(|run| {
+            filters.min_read_lines.map_or(true, |min| {
+                run.read_total_lines.map_or(false, |lines| lines >= min)
+            })
         })
         .filter(|run| {
             filters
@@ -1717,6 +1725,9 @@ mod tests {
             project_alias: "project-a".to_string(),
             worktree_name: Some("worktree-a".to_string()),
             canonical_cwd: Some("/tmp/project".to_string()),
+            read_total_lines: None,
+            read_lines: None,
+            read_truncated: None,
         }
     }
 
@@ -1730,6 +1741,9 @@ mod tests {
         second.command = None;
         second.input_summary = None;
         second.file_paths.clear();
+        second.read_total_lines = Some(1500);
+        second.read_lines = Some(200);
+        second.read_truncated = Some(true);
 
         let runs = vec![first.clone(), second.clone()];
         let filters = RunFilters {
@@ -1742,11 +1756,33 @@ mod tests {
             file_path: Some("src/lib".to_string()),
             min_duration: Some(90),
             max_duration: Some(200),
+            min_read_lines: None,
             status: Some("error".to_string()),
             since: Some("2026-01-01".to_string()),
             limit: None,
         };
         assert_eq!(filter_runs(runs.clone(), &filters).len(), 1);
+
+        // `min_read_lines` matches on the file's total size, so the partially
+        // read 1500-line file is kept even though only 200 lines were returned,
+        // and the non-Read run (no line metadata) is dropped.
+        let big_reads = filter_runs(
+            runs.clone(),
+            &RunFilters {
+                min_read_lines: Some(1000),
+                ..RunFilters::default()
+            },
+        );
+        assert_eq!(big_reads.len(), 1);
+        assert_eq!(big_reads[0].tool_use_id, "toolu_b");
+        assert!(filter_runs(
+            runs.clone(),
+            &RunFilters {
+                min_read_lines: Some(2000),
+                ..RunFilters::default()
+            },
+        )
+        .is_empty());
         assert!(filter_runs(
             runs.clone(),
             &RunFilters {

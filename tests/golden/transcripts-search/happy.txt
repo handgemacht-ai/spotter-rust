@@ -1,6 +1,6 @@
 exit: 0
 stdout:
-tool_use_id | tool_name | command | status | duration_ms
----------------------------------------------------------
-<TOOL_USE_ID> | Bash | mix phx.server | completed | 1000
+tool_use_id | tool_name | command | status | duration_ms | file_lines
+------------------------------------------------------------------------
+<TOOL_USE_ID> | Bash | mix phx.server | completed | 1000 | -
 stderr:

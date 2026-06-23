@@ -79,6 +79,9 @@ CREATE TABLE tool_call_runs (
             project_alias TEXT NOT NULL,
             worktree_name TEXT,
             canonical_cwd TEXT,
+            read_total_lines INTEGER,
+            read_lines INTEGER,
+            read_truncated INTEGER,
             PRIMARY KEY(session_id, tool_use_id),
             FOREIGN KEY(session_id) REFERENCES sessions(id),
             FOREIGN KEY(project_alias) REFERENCES projects(alias)

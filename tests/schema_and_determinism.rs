@@ -39,7 +39,7 @@ fn migration_from_v2_snapshots_backfills_and_preserves_data() {
     let user_version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("user version");
-    assert_eq!(user_version, 4);
+    assert_eq!(user_version, 5);
 
     let message_count: i64 = conn
         .query_row("SELECT count(*) FROM messages", [], |row| row.get(0))

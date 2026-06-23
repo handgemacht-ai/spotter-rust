@@ -163,6 +163,10 @@ struct SearchArgs {
     #[arg(long)]
     max_duration: Option<i64>,
 
+    /// Keep only Read runs whose file has at least this many total lines.
+    #[arg(long)]
+    min_read_lines: Option<i64>,
+
     /// Filter by status.
     #[arg(long)]
     status: Option<String>,
@@ -488,6 +492,10 @@ struct ScanSearchArgs {
     /// Maximum duration in milliseconds.
     #[arg(long)]
     max_duration: Option<i64>,
+
+    /// Keep only Read runs whose file has at least this many total lines.
+    #[arg(long)]
+    min_read_lines: Option<i64>,
 
     /// Filter by status (`completed`, `error`, `ongoing`, `orphan`).
     #[arg(long)]
@@ -1171,6 +1179,7 @@ fn search(args: SearchArgs, db_path: PathBuf) -> Result<()> {
         file_path: args.file_path,
         min_duration: args.min_duration,
         max_duration: args.max_duration,
+        min_read_lines: args.min_read_lines,
         status: args.status,
         since: None,
         limit: Some(args.limit),
@@ -1268,6 +1277,7 @@ fn scan_search(
         file_path: args.file_path,
         min_duration: args.min_duration,
         max_duration: args.max_duration,
+        min_read_lines: args.min_read_lines,
         status: args.status,
         since: args.since,
         limit: Some(args.limit),
@@ -1571,18 +1581,28 @@ fn print_runs(runs: &[db::ToolCallRun]) {
         return;
     }
 
-    println!("tool_use_id | tool_name | command | status | duration_ms");
-    println!("---------------------------------------------------------");
+    println!("tool_use_id | tool_name | command | status | duration_ms | file_lines");
+    println!("------------------------------------------------------------------------");
     for run in runs {
         println!(
-            "{} | {} | {} | {} | {}",
+            "{} | {} | {} | {} | {} | {}",
             run.tool_use_id,
             run.tool_name,
             run.command.as_deref().unwrap_or(""),
             run.status,
             run.duration_ms
-                .map_or_else(|| "n/a".to_string(), |duration| duration.to_string())
+                .map_or_else(|| "n/a".to_string(), |duration| duration.to_string()),
+            format_file_lines(run),
         );
+    }
+}
+
+/// Render the file line count for a `Read` run, flagging token-cap truncation.
+fn format_file_lines(run: &db::ToolCallRun) -> String {
+    match run.read_total_lines {
+        Some(total) if run.read_truncated == Some(true) => format!("{total} (truncated)"),
+        Some(total) => total.to_string(),
+        None => "-".to_string(),
     }
 }
 
