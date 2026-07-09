@@ -1,0 +1,19 @@
+{
+  "files": [
+    {
+      "path": "/srv/town/rig-a/src/deep/hidden.rs",
+      "sessions": 3,
+      "median_cost": 2.0
+    },
+    {
+      "path": "/srv/town/rig-a/src/mid.rs",
+      "sessions": 4,
+      "median_cost": 1.5
+    },
+    {
+      "path": "/srv/town/rig-a/src/easy.rs",
+      "sessions": 3,
+      "median_cost": 0.0
+    }
+  ]
+}
