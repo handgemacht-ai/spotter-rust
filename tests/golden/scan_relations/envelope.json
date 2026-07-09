@@ -1,0 +1,54 @@
+{
+  "cochange_session": {
+    "pairs": []
+  },
+  "coordinator_count": 1,
+  "cost": {
+    "files": []
+  },
+  "discoverability": {
+    "files": []
+  },
+  "docs_steer": {
+    "docs": []
+  },
+  "fanout_cap": 100,
+  "friction": {
+    "files": []
+  },
+  "generated_at": "2026-07-01T12:00:00+00:00",
+  "provenance": [
+    {
+      "path": "/srv/town/rig-a/README.md",
+      "session_ids": [
+        "sess-alpha"
+      ]
+    },
+    {
+      "path": "/srv/town/rig-a/src/cli.rs",
+      "session_ids": [
+        "sess-alpha"
+      ]
+    },
+    {
+      "path": "/srv/town/rig-a/src/lib.rs",
+      "session_ids": [
+        "sess-alpha"
+      ]
+    },
+    {
+      "path": "/srv/town/rig-b/main.go",
+      "session_ids": [
+        "sess-coord"
+      ]
+    }
+  ],
+  "read_clusters": {
+    "clusters": []
+  },
+  "rework": {
+    "files": []
+  },
+  "session_count": 2,
+  "since_days": 30
+}

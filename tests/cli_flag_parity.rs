@@ -356,6 +356,39 @@ fn carried_over_flags_accept_representative_values() {
     assert_success(db_path, config_path, &["projects", "remove", "renamed"]);
 }
 
+/// `scan relations` is a new (non-legacy) verb, so parity here means its own
+/// flags round-trip into the frozen envelope rather than matching a prior
+/// Elixir implementation.
+#[test]
+fn scan_relations_flags_round_trip() {
+    let db = NamedTempFile::new().expect("temp db");
+    let db_path = db.path().to_str().expect("utf8 temp path");
+    let config = NamedTempFile::new().expect("temp config");
+    let config_path = config.path().to_str().expect("utf8 temp path");
+
+    let envelope = command_json(
+        db_path,
+        config_path,
+        &[
+            "scan",
+            "--root",
+            FIXTURE_ROOT,
+            "relations",
+            "--since",
+            "0",
+            "--fanout-cap",
+            "17",
+            "--format",
+            "json",
+        ],
+    );
+    assert_eq!(envelope["since_days"], 0);
+    assert_eq!(envelope["fanout_cap"], 17);
+    assert!(envelope["cochange_session"]["pairs"].is_array());
+    assert!(envelope["provenance"].is_array());
+    assert!(envelope["session_count"].as_u64().expect("session count") > 0);
+}
+
 fn assert_success(db_path: &str, config_path: &str, args: &[&str]) {
     Command::cargo_bin("spotter")
         .expect("binary")
