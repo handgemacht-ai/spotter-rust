@@ -106,7 +106,23 @@
     "clusters": []
   },
   "rework": {
-    "files": []
+    "files": [
+      {
+        "badge": false,
+        "path": "/srv/town/rig-a/src/cli.rs",
+        "sessions": 1
+      },
+      {
+        "badge": false,
+        "path": "/srv/town/rig-a/src/lib.rs",
+        "sessions": 1
+      },
+      {
+        "badge": false,
+        "path": "/srv/town/rig-b/main.go",
+        "sessions": 1
+      }
+    ]
   },
   "session_count": 2,
   "since_days": 30
