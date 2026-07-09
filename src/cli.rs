@@ -13,9 +13,15 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
+use serde_json::{json, Value};
 use signal_hook::{consts::SIGINT, flag};
 
-use crate::{analytics, config::Config, db, jsonl, paths, scan};
+use crate::session_facts::{self, RelationsOptions, SessionFacts};
+use crate::{
+    analytics, config::Config, db, jsonl, metric_cochange_session, metric_cost,
+    metric_discoverability, metric_docs_steer, metric_friction, metric_read_clusters,
+    metric_rework, paths, scan,
+};
 
 /// Run the Spotter CLI.
 pub fn run() -> Result<()> {
@@ -449,6 +455,27 @@ enum ScanSubcommand {
     Sequences(SequencesArgs),
     /// Score how often files are opened via the Read tool.
     ReadScores(ReadScoresArgs),
+    /// Mine cross-file usage relations from transcripts.
+    Relations(RelationsArgs),
+}
+
+#[derive(Debug, Args)]
+struct RelationsArgs {
+    /// Metric window in days; also mtime-prunes the transcript file list.
+    #[arg(long, default_value_t = 30)]
+    since: u32,
+
+    /// Optional canonical root filter, applied to file paths after normalization.
+    #[arg(long)]
+    under: Option<String>,
+
+    /// Fan-out cap `K`, applied only to pair emission.
+    #[arg(long, default_value_t = 100)]
+    fanout_cap: usize,
+
+    /// Output format: table or json.
+    #[arg(long, default_value = "json")]
+    format: String,
 }
 
 #[derive(Debug, Args)]
@@ -1223,6 +1250,7 @@ fn run_scan(command: ScanCommand, config: &Config, cancel: &AtomicBool) -> Resul
         ScanSubcommand::Health(args) => scan_health(args, &targets, config, cancel),
         ScanSubcommand::Sequences(args) => scan_sequences(args, &targets, config, cancel),
         ScanSubcommand::ReadScores(args) => scan_read_scores(args, &targets, config, cancel),
+        ScanSubcommand::Relations(args) => scan_relations(args, &targets, config, cancel),
     }
 }
 
@@ -1497,6 +1525,144 @@ fn print_read_scores(result: &analytics::ReadScoreResult) {
     }
 }
 
+/// One relations metric, dispatched by key.
+///
+/// Adding a metric is one append-only line here plus its module — no edits to
+/// the code above.
+struct MetricSpec {
+    /// Envelope key the metric result is folded under.
+    key: &'static str,
+    /// Runner producing the metric's serialized result from shared facts.
+    run: fn(&[SessionFacts], &RelationsOptions) -> Value,
+}
+
+const RELATIONS_REGISTRY: &[MetricSpec] = &[
+    MetricSpec {
+        key: "cochange_session",
+        run: |f, o| json!(metric_cochange_session::cochange_session(f, o)),
+    },
+    MetricSpec {
+        key: "read_clusters",
+        run: |f, o| json!(metric_read_clusters::read_clusters(f, o)),
+    },
+    MetricSpec {
+        key: "rework",
+        run: |f, o| json!(metric_rework::rework(f, o)),
+    },
+    MetricSpec {
+        key: "friction",
+        run: |f, o| json!(metric_friction::friction(f, o)),
+    },
+    MetricSpec {
+        key: "cost",
+        run: |f, o| json!(metric_cost::cost(f, o)),
+    },
+    MetricSpec {
+        key: "docs_steer",
+        run: |f, o| json!(metric_docs_steer::docs_steer(f, o)),
+    },
+    MetricSpec {
+        key: "discoverability",
+        run: |f, o| json!(metric_discoverability::discoverability(f, o)),
+    },
+];
+
+/// Assemble the frozen relations envelope from shared facts.
+///
+/// The scalar fields, each registered metric result, and the provenance
+/// byproduct are folded into one JSON object. Output is deterministic:
+/// `serde_json` orders object keys and every metric sorts its own lists.
+#[must_use]
+pub fn build_relations_envelope(facts: &[SessionFacts], opts: &RelationsOptions) -> Value {
+    let mut envelope = serde_json::Map::new();
+    envelope.insert("generated_at".to_string(), json!(opts.now.to_rfc3339()));
+    envelope.insert("since_days".to_string(), json!(opts.since_days));
+    envelope.insert("fanout_cap".to_string(), json!(opts.fanout_cap));
+    envelope.insert("session_count".to_string(), json!(facts.len()));
+    let coordinator_count = facts.iter().filter(|facts| facts.is_coordinator).count();
+    envelope.insert("coordinator_count".to_string(), json!(coordinator_count));
+    for spec in RELATIONS_REGISTRY {
+        envelope.insert(spec.key.to_string(), (spec.run)(facts, opts));
+    }
+    envelope.insert(
+        "provenance".to_string(),
+        json!(session_facts::build_provenance(facts)),
+    );
+    Value::Object(envelope)
+}
+
+fn scan_relations(
+    args: RelationsArgs,
+    targets: &[PathBuf],
+    config: &Config,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let store = scan::load_lean(targets, config, cancel, args.since)?;
+    for (path, error) in &store.errors {
+        eprintln!("Skipped {}: {:#}", path.display(), error);
+    }
+    let canon = session_facts::build_canonicalizer(&store);
+    let options = RelationsOptions {
+        now: Utc::now(),
+        since_days: args.since,
+        fanout_cap: args.fanout_cap,
+    };
+    let mut facts = session_facts::build_session_facts(&store, &canon, &options);
+    if let Some(under) = &args.under {
+        facts = session_facts::filter_under(facts, under);
+    }
+    let envelope = build_relations_envelope(&facts, &options);
+    output(&envelope, &args.format, || {
+        print_relations_summary(&envelope)
+    })
+}
+
+fn print_relations_summary(envelope: &Value) {
+    let count = |key: &str, field: &str| {
+        envelope
+            .get(key)
+            .and_then(|value| value.get(field))
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len)
+    };
+    println!(
+        "Relations ({} sessions, {} coordinators, {}-day window):\n",
+        envelope
+            .get("session_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        envelope
+            .get("coordinator_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        envelope
+            .get("since_days")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+    );
+    println!(
+        "  cochange_session pairs : {}",
+        count("cochange_session", "pairs")
+    );
+    println!(
+        "  read_clusters clusters : {}",
+        count("read_clusters", "clusters")
+    );
+    println!("  rework files           : {}", count("rework", "files"));
+    println!("  friction files         : {}", count("friction", "files"));
+    println!("  cost files             : {}", count("cost", "files"));
+    println!("  docs_steer docs        : {}", count("docs_steer", "docs"));
+    println!(
+        "  discoverability files  : {}",
+        count("discoverability", "files")
+    );
+    let provenance = envelope
+        .get("provenance")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    println!("  provenance files       : {provenance}");
+}
+
 fn print_scan_audit_reports(reports: &[scan::AuditFileReport]) {
     for report in reports {
         println!("Session: {}", report.session_id);
@@ -1513,7 +1679,7 @@ fn print_scan_audit_reports(reports: &[scan::AuditFileReport]) {
 
 fn print_scan_index() {
     println!(
-        "Spotter Scan (DB-less) CLI\n\nCommands:\n\n  spotter scan search      Search tool call runs and transcript content\n  spotter scan inspect     Inspect tool call runs for a specific session\n  spotter scan compare     Compare tool runs between session cohorts\n  spotter scan aggregate   Aggregate tool usage across sessions\n  spotter scan audit       Audit transcript JSONL completeness\n  spotter scan errors      Analyze tool call errors\n  spotter scan health      Analyze transcript token health\n  spotter scan sequences   Find tool call patterns and retries\n  spotter scan read-scores Score how often files are opened via Read\n\nScan-level options (apply to every subcommand):\n  --file <path>      Scan a specific JSONL transcript (repeatable)\n  --root <path>      Scan every JSONL under a transcript root (repeatable)\n  --no-subagents     Skip subagent transcripts when walking roots"
+        "Spotter Scan (DB-less) CLI\n\nCommands:\n\n  spotter scan search      Search tool call runs and transcript content\n  spotter scan inspect     Inspect tool call runs for a specific session\n  spotter scan compare     Compare tool runs between session cohorts\n  spotter scan aggregate   Aggregate tool usage across sessions\n  spotter scan audit       Audit transcript JSONL completeness\n  spotter scan errors      Analyze tool call errors\n  spotter scan health      Analyze transcript token health\n  spotter scan sequences   Find tool call patterns and retries\n  spotter scan read-scores Score how often files are opened via Read\n  spotter scan relations   Mine cross-file usage relations from transcripts\n\nScan-level options (apply to every subcommand):\n  --file <path>      Scan a specific JSONL transcript (repeatable)\n  --root <path>      Scan every JSONL under a transcript root (repeatable)\n  --no-subagents     Skip subagent transcripts when walking roots"
     );
 }
 
