@@ -510,6 +510,8 @@ pub fn count_jsonl_lines(path: &Path) -> Result<i64> {
     Ok(text.lines().filter(|line| !line.trim().is_empty()).count() as i64)
 }
 
+// Mostly one schema DDL string; splitting it across functions would obscure it.
+#[allow(clippy::too_many_lines)]
 fn migrate(conn: &Connection, path: &Path) -> Result<()> {
     let version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if version > SCHEMA_VERSION {

@@ -387,7 +387,7 @@ pub fn canonical_read_path(worktree_re: &Regex, path: &str) -> String {
 /// Score how often each file is opened via the `Read` tool, weighting recent
 /// reads more heavily and folding worktree reads onto the canonical path.
 pub fn read_scores_in(runs: Vec<ToolCallRun>, opts: &ReadScoreOptions) -> ReadScoreResult {
-    let worktree_re = Regex::new(r"/\.claude/worktrees/[^/]+/").expect("valid worktree regex");
+    let worktree_re = Regex::new(r"/\.claude/worktrees/[^/]+/").ok();
     let ext_suffix = opts
         .ext
         .as_ref()
@@ -398,19 +398,21 @@ pub fn read_scores_in(runs: Vec<ToolCallRun>, opts: &ReadScoreOptions) -> ReadSc
     let mut total_reads = 0usize;
 
     for run in runs.iter().filter(|run| run.tool_name == "Read") {
-        let weight = match run.started_at.as_deref().and_then(parse_timestamp) {
-            Some(timestamp) => {
-                let age_days =
-                    (opts.now - timestamp).num_seconds().max(0) as f64 / 86_400.0;
+        // No timestamp: still counts as a raw read, but adds nothing to the
+        // recency-weighted score rather than guessing an age.
+        let weight = run
+            .started_at
+            .as_deref()
+            .and_then(parse_timestamp)
+            .map_or(0.0, |timestamp| {
+                let age_days = (opts.now - timestamp).num_seconds().max(0) as f64 / 86_400.0;
                 0.5f64.powf(age_days / half_life)
-            }
-            // No timestamp: still counts as a raw read, but adds nothing to the
-            // recency-weighted score rather than guessing an age.
-            None => 0.0,
-        };
+            });
 
         for raw in &run.file_paths {
-            let path = canonical_read_path(&worktree_re, raw);
+            let path = worktree_re
+                .as_ref()
+                .map_or_else(|| raw.clone(), |re| canonical_read_path(re, raw));
             if let Some(under) = &opts.under {
                 if !path.starts_with(under) {
                     continue;
@@ -427,10 +429,7 @@ pub fn read_scores_in(runs: Vec<ToolCallRun>, opts: &ReadScoreOptions) -> ReadSc
             entry.0 += weight;
             entry.1 += 1;
             if let Some(ts) = run.started_at.as_deref() {
-                let newer = match entry.2.as_deref() {
-                    Some(existing) => ts > existing,
-                    None => true,
-                };
+                let newer = entry.2.as_deref().map_or(true, |existing| ts > existing);
                 if newer {
                     entry.2 = Some(ts.to_string());
                 }
@@ -507,7 +506,7 @@ pub fn search_content_in(messages: &[StoredMessage], text: &str, limit: usize) -
 
 /// A normalized message kept in-memory by the scan path.
 ///
-/// Mirrors what the SQLite messages table stores so the same analytics cores
+/// Mirrors what the `SQLite` messages table stores so the same analytics cores
 /// can run against either backing store.
 #[derive(Debug, Clone)]
 pub struct StoredMessage {
@@ -736,7 +735,12 @@ pub fn error_analysis(
     top: usize,
     classify: bool,
 ) -> Result<ErrorAnalysisResult> {
-    Ok(error_analysis_in(db::list_runs(conn)?, filters, top, classify))
+    Ok(error_analysis_in(
+        db::list_runs(conn)?,
+        filters,
+        top,
+        classify,
+    ))
 }
 
 /// Analyze error patterns against an already-loaded set of runs.

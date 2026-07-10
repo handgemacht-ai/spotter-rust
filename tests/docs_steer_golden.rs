@@ -44,7 +44,7 @@ fn edit(name: &str) -> SessionEvent {
     }
 }
 
-fn grep() -> SessionEvent {
+const fn grep() -> SessionEvent {
     SessionEvent {
         ts: None,
         kind: SessionEventKind::Grep,
