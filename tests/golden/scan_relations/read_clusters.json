@@ -1,0 +1,21 @@
+{
+  "clusters": [
+    {
+      "files": [
+        "/srv/town/rig-a/src/ast.rs",
+        "/srv/town/rig-a/src/lexer.rs",
+        "/srv/town/rig-a/src/parser.rs"
+      ],
+      "label": "/srv/town/rig-a/src",
+      "size": 3
+    },
+    {
+      "files": [
+        "/srv/town/rig-b/lib/client.go",
+        "/srv/town/rig-b/lib/server.go"
+      ],
+      "label": "/srv/town/rig-b/lib",
+      "size": 2
+    }
+  ]
+}
