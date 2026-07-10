@@ -200,6 +200,34 @@ fn oversized_cluster_is_capped_but_reports_true_size() {
 }
 
 #[test]
+fn session_over_fanout_cap_emits_no_pairs() {
+    // 5 sessions each read the same 10 files: under the default cap this is one
+    // 10-member cluster, but a small fan-out cap marks each as a broad sweep and
+    // skips it wholesale, so its O(n^2) co-read pairs are never emitted.
+    let files: Vec<String> = (0..10)
+        .map(|i| format!("/srv/town/rig/mod/file{i:02}.rs"))
+        .collect();
+    let refs: Vec<&str> = files.iter().map(String::as_str).collect();
+    let facts: Vec<SessionFacts> = (0..5)
+        .map(|i| reading_session(&format!("s{i}"), false, &refs))
+        .collect();
+
+    // Default cap (100): the 10 files form one cluster.
+    assert_eq!(read_clusters(&facts, &opts()).clusters.len(), 1);
+
+    // Small cap (5): every session reads 10 > 5 distinct files, so all are
+    // skipped and no cluster forms.
+    let capped = RelationsOptions {
+        fanout_cap: 5,
+        ..opts()
+    };
+    assert!(
+        read_clusters(&facts, &capped).clusters.is_empty(),
+        "sessions over the fan-out cap must not emit co-read pairs"
+    );
+}
+
+#[test]
 fn output_is_deterministic() {
     let facts = fixed_facts();
     let first = serde_json::to_vec(&read_clusters(&facts, &opts())).expect("json");

@@ -53,9 +53,12 @@ pub struct ReadClustersResult {
 /// [`MAX_CLUSTER_FILES`] (a drop shows as `size > files.len()`).
 #[must_use]
 pub fn read_clusters(facts: &[SessionFacts], opts: &RelationsOptions) -> ReadClustersResult {
-    // Windowing is applied upstream by the `--since` mtime prune; the cluster
-    // metric needs no per-event window and no fan-out knob.
-    let _ = opts;
+    // Windowing is applied upstream by the `--since` mtime prune. The fan-out cap
+    // bounds pair emission: a session that reads more than `fanout_cap` distinct
+    // files is a broad sweep, not focused co-reading, and emitting its full
+    // O(n^2) co-read pairs would explode memory. Such sessions are skipped
+    // wholesale, mirroring the coordinator guard and metric_cochange_session's cap.
+    let fanout_cap = opts.fanout_cap;
 
     // Per file: the logical sessions that read it. Per unordered pair: the
     // logical sessions that read both. Session identity is the fact index.
@@ -72,6 +75,11 @@ pub fn read_clusters(facts: &[SessionFacts], opts: &RelationsOptions) -> ReadClu
             .iter()
             .map(|event| event.path.as_str())
             .collect();
+        // Cap pair emission: skip a session whose distinct-read count exceeds the
+        // fan-out cap, bounding its pair contribution at C(fanout_cap, 2).
+        if read_set.len() > fanout_cap {
+            continue;
+        }
         for file in &read_set {
             file_sessions.entry(file).or_default().insert(idx);
         }
