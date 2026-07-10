@@ -1,0 +1,19 @@
+{
+  "docs": [
+    {
+      "doc": "/srv/town/rig/docs/architecture.md",
+      "targets": [
+        "/srv/town/rig/src/app.rs",
+        "/srv/town/rig/src/server.rs"
+      ],
+      "sessions": 2
+    },
+    {
+      "doc": "/srv/town/rig/CLAUDE.md",
+      "targets": [
+        "/srv/town/rig/src/z.rs"
+      ],
+      "sessions": 1
+    }
+  ]
+}
