@@ -1,0 +1,30 @@
+{
+  "files": [
+    {
+      "path": "core.rs",
+      "read": {
+        "sessions": 0,
+        "median_active_seconds": 0,
+        "p90_active_seconds": 0
+      },
+      "edit": {
+        "sessions": 2,
+        "median_active_seconds": 60,
+        "p90_active_seconds": 300
+      }
+    },
+    {
+      "path": "guide.md",
+      "read": {
+        "sessions": 2,
+        "median_active_seconds": 60,
+        "p90_active_seconds": 180
+      },
+      "edit": {
+        "sessions": 0,
+        "median_active_seconds": 0,
+        "p90_active_seconds": 0
+      }
+    }
+  ]
+}
