@@ -441,10 +441,24 @@ pub fn build_session_facts(
             .push(run);
     }
     for runs in runs_by_logical.values_mut() {
+        // Order by wall-clock timestamp so a parent and its subagent sidecars —
+        // which carry *independent* per-transcript ordinals — interleave
+        // chronologically. Sorting on `start_ordinal` alone would place a
+        // low-ordinal subagent event before a high-ordinal parent event that
+        // actually happened earlier, corrupting the read-precedes-edit ordering
+        // docs_steer and discoverability depend on. Runs without a timestamp fall
+        // to the back; ordinal (chronological *within* one transcript) then
+        // tool_use_id break ties deterministically.
         runs.sort_by(|left, right| {
-            left.start_ordinal
-                .unwrap_or(i64::MAX)
-                .cmp(&right.start_ordinal.unwrap_or(i64::MAX))
+            let lt = left.started_at.as_deref();
+            let rt = right.started_at.as_deref();
+            (lt.is_none(), lt)
+                .cmp(&(rt.is_none(), rt))
+                .then_with(|| {
+                    left.start_ordinal
+                        .unwrap_or(i64::MAX)
+                        .cmp(&right.start_ordinal.unwrap_or(i64::MAX))
+                })
                 .then_with(|| left.tool_use_id.cmp(&right.tool_use_id))
         });
     }
@@ -494,13 +508,19 @@ pub fn build_session_facts(
             let kind = classify(&run.tool_name);
             match kind {
                 SessionEventKind::Read => {
-                    for raw in &run.file_paths {
-                        let path = canon.canonical(raw);
-                        reads.push(FileEvent {
-                            path: path.clone(),
-                            ts: ts.clone(),
-                            message_id: message_id.clone(),
-                        });
+                    // A failed Read (file-not-found, etc.) loaded nothing, so it
+                    // must not enter the reads cohort the friction / read_clusters
+                    // metrics consume. It still records a SessionEvent (with
+                    // success=false) so discoverability sees the search effort.
+                    if success {
+                        for raw in &run.file_paths {
+                            let path = canon.canonical(raw);
+                            reads.push(FileEvent {
+                                path: path.clone(),
+                                ts: ts.clone(),
+                                message_id: message_id.clone(),
+                            });
+                        }
                     }
                     events.push(SessionEvent {
                         ts: ts.clone(),
@@ -516,13 +536,18 @@ pub fn build_session_facts(
                         .iter()
                         .map(|raw| canon.canonical(raw))
                         .collect();
-                    record_edits(
-                        &paths,
-                        &ts,
-                        message_id.as_ref(),
-                        &mut edits,
-                        &mut turn_files,
-                    );
+                    // A failed Edit (stale old_string, etc.) changed nothing, so it
+                    // must not count toward rework / cochange_session / cost. The
+                    // SessionEvent below still records the attempt for active time.
+                    if success {
+                        record_edits(
+                            &paths,
+                            &ts,
+                            message_id.as_ref(),
+                            &mut edits,
+                            &mut turn_files,
+                        );
+                    }
                     events.push(SessionEvent {
                         ts: ts.clone(),
                         kind,
@@ -543,13 +568,17 @@ pub fn build_session_facts(
                     } else {
                         SessionEventKind::Edit
                     };
-                    record_edits(
-                        &paths,
-                        &ts,
-                        message_id.as_ref(),
-                        &mut edits,
-                        &mut turn_files,
-                    );
+                    // A failed Bash write changed nothing, so it must not be
+                    // attributed as an edit; the SessionEvent still records it.
+                    if success {
+                        record_edits(
+                            &paths,
+                            &ts,
+                            message_id.as_ref(),
+                            &mut edits,
+                            &mut turn_files,
+                        );
+                    }
                     events.push(SessionEvent {
                         ts: ts.clone(),
                         kind,
@@ -815,5 +844,172 @@ mod tests {
     fn bash_write_targets_ignores_plain_commands() {
         assert!(bash_write_targets("cargo test --all").is_empty());
         assert!(bash_write_targets("grep -rn foo src").is_empty());
+    }
+
+    /// Build a minimal [`ToolCallRun`], varying only the fields the fold reads.
+    /// The `canonical_cwd` fallback stands in for a per-message cwd, and an empty
+    /// rig set makes `Canonicalizer::known` degrade to accepting it.
+    #[allow(clippy::too_many_arguments)]
+    fn mk_run(
+        external: &str,
+        session: &str,
+        tool: &str,
+        file: &str,
+        status: &str,
+        started_at: &str,
+        ordinal: i64,
+    ) -> crate::db::ToolCallRun {
+        crate::db::ToolCallRun {
+            tool_use_id: format!("{session}-{ordinal}"),
+            session_id: session.to_string(),
+            external_session_id: external.to_string(),
+            parent_session_id: None,
+            is_subagent: false,
+            agent_id: None,
+            tool_name: tool.to_string(),
+            command: None,
+            command_program: None,
+            command_args: Vec::new(),
+            command_fingerprint: None,
+            input_summary: None,
+            input_size: None,
+            output_size: None,
+            file_paths: vec![file.to_string()],
+            status: status.to_string(),
+            started_at: Some(started_at.to_string()),
+            finished_at: None,
+            duration_ms: None,
+            start_ordinal: Some(ordinal),
+            end_ordinal: None,
+            source_scope: None,
+            error_content: None,
+            project_alias: String::new(),
+            worktree_name: None,
+            canonical_cwd: Some("/srv/town/rig".to_string()),
+            read_total_lines: None,
+            read_lines: None,
+            read_truncated: None,
+        }
+    }
+
+    fn facts_from_runs(runs: Vec<crate::db::ToolCallRun>) -> Vec<SessionFacts> {
+        let store = crate::scan::LeanStore {
+            runs,
+            ..Default::default()
+        };
+        let opts = RelationsOptions {
+            now: Utc::now(),
+            since_days: 30,
+            fanout_cap: 100,
+        };
+        build_session_facts(&store, &canon_with_rigs(&[]), &opts)
+    }
+
+    #[test]
+    fn failed_read_is_excluded_from_reads_but_kept_as_event() {
+        let facts = facts_from_runs(vec![
+            mk_run(
+                "s",
+                "s",
+                "Read",
+                "/srv/town/rig/a.rs",
+                "error",
+                "2026-06-01T10:00:00+00:00",
+                0,
+            ),
+            mk_run(
+                "s",
+                "s",
+                "Read",
+                "/srv/town/rig/b.rs",
+                "ok",
+                "2026-06-01T10:01:00+00:00",
+                1,
+            ),
+        ]);
+        assert_eq!(facts.len(), 1);
+        let session = &facts[0];
+        // Only the successful read enters the reads cohort.
+        assert_eq!(session.reads.len(), 1);
+        assert_eq!(session.reads[0].path, "/srv/town/rig/b.rs");
+        // Both reads still record an ordered event; the failed one is flagged.
+        assert_eq!(session.events.len(), 2);
+        assert!(!session.events[0].success);
+        assert!(session.events[1].success);
+    }
+
+    #[test]
+    fn failed_edit_is_excluded_from_edits() {
+        let facts = facts_from_runs(vec![
+            mk_run(
+                "s",
+                "s",
+                "Edit",
+                "/srv/town/rig/a.rs",
+                "error",
+                "2026-06-01T10:00:00+00:00",
+                0,
+            ),
+            // A successful read keeps the session alive so we can inspect it.
+            mk_run(
+                "s",
+                "s",
+                "Read",
+                "/srv/town/rig/b.rs",
+                "ok",
+                "2026-06-01T10:01:00+00:00",
+                1,
+            ),
+        ]);
+        assert_eq!(facts.len(), 1);
+        let session = &facts[0];
+        assert!(session.edits.is_empty(), "failed edit must not enter edits");
+        assert_eq!(session.reads.len(), 1);
+        assert_eq!(session.events.len(), 2);
+    }
+
+    #[test]
+    fn folded_subagent_runs_order_by_timestamp_not_ordinal() {
+        // Parent reads a doc at parent-ordinal 8; a subagent (same external id)
+        // edits code at subagent-ordinal 2 but a LATER timestamp. Folded and
+        // sorted by timestamp, the parent read must precede the subagent edit
+        // despite the lower ordinal — the ordering docs_steer depends on.
+        let parent = mk_run(
+            "ext",
+            "ext",
+            "Read",
+            "/srv/town/rig/docs/arch.md",
+            "ok",
+            "2026-06-01T10:00:00+00:00",
+            8,
+        );
+        let mut sub = mk_run(
+            "ext",
+            "ext:agent:a1",
+            "Edit",
+            "/srv/town/rig/src/app.rs",
+            "ok",
+            "2026-06-01T10:05:00+00:00",
+            2,
+        );
+        sub.is_subagent = true;
+
+        // Input order reversed to prove the sort, not insertion order, decides.
+        let facts = facts_from_runs(vec![sub, parent]);
+        assert_eq!(facts.len(), 1, "parent + subagent fold into one session");
+        let session = &facts[0];
+        assert_eq!(session.events.len(), 2);
+        assert_eq!(
+            session.events[0].kind,
+            SessionEventKind::Read,
+            "earlier-timestamp read must come first"
+        );
+        assert_eq!(
+            session.events[1].kind,
+            SessionEventKind::Edit,
+            "later-timestamp edit must come second"
+        );
+        assert_eq!(session.reads.len(), 1);
+        assert_eq!(session.edits.len(), 1);
     }
 }
