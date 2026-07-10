@@ -1,0 +1,28 @@
+{
+  "files": [
+    {
+      "path": "/srv/town/rig-a/a.rs",
+      "tokens": 800,
+      "turns": 2,
+      "tier": 4
+    },
+    {
+      "path": "/srv/town/rig-a/b.rs",
+      "tokens": 500,
+      "turns": 1,
+      "tier": 3
+    },
+    {
+      "path": "/srv/town/rig-b/c.go",
+      "tokens": 200,
+      "turns": 1,
+      "tier": 1
+    },
+    {
+      "path": "/srv/town/rig-a/d.rs",
+      "tokens": 0,
+      "turns": 1,
+      "tier": 0
+    }
+  ]
+}
