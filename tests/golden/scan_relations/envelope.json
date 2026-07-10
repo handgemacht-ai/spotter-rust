@@ -4,7 +4,26 @@
   },
   "coordinator_count": 1,
   "cost": {
-    "files": []
+    "files": [
+      {
+        "path": "/srv/town/rig-a/src/lib.rs",
+        "tier": 4,
+        "tokens": 1200,
+        "turns": 1
+      },
+      {
+        "path": "/srv/town/rig-a/src/cli.rs",
+        "tier": 3,
+        "tokens": 800,
+        "turns": 1
+      },
+      {
+        "path": "/srv/town/rig-b/main.go",
+        "tier": 1,
+        "tokens": 400,
+        "turns": 1
+      }
+    ]
   },
   "discoverability": {
     "files": []
