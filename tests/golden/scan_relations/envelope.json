@@ -14,7 +14,47 @@
   },
   "fanout_cap": 100,
   "friction": {
-    "files": []
+    "files": [
+      {
+        "edit": {
+          "median_active_seconds": 0,
+          "p90_active_seconds": 0,
+          "sessions": 0
+        },
+        "path": "/srv/town/rig-a/README.md",
+        "read": {
+          "median_active_seconds": 60,
+          "p90_active_seconds": 60,
+          "sessions": 1
+        }
+      },
+      {
+        "edit": {
+          "median_active_seconds": 60,
+          "p90_active_seconds": 60,
+          "sessions": 1
+        },
+        "path": "/srv/town/rig-a/src/cli.rs",
+        "read": {
+          "median_active_seconds": 0,
+          "p90_active_seconds": 0,
+          "sessions": 0
+        }
+      },
+      {
+        "edit": {
+          "median_active_seconds": 60,
+          "p90_active_seconds": 60,
+          "sessions": 1
+        },
+        "path": "/srv/town/rig-a/src/lib.rs",
+        "read": {
+          "median_active_seconds": 0,
+          "p90_active_seconds": 0,
+          "sessions": 0
+        }
+      }
+    ]
   },
   "generated_at": "2026-07-01T12:00:00+00:00",
   "provenance": [
