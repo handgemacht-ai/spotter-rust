@@ -68,33 +68,45 @@ fn assert_or_regen(actual: &str) {
 /// cluster (4 sessions), a sub-threshold pair (3 sessions), and a coordinator
 /// that reads everything but must be excluded.
 fn fixed_facts() -> Vec<SessionFacts> {
-    let a = "/srv/town/rig-a/src/ast.rs";
-    let b = "/srv/town/rig-a/src/lexer.rs";
-    let c = "/srv/town/rig-a/src/parser.rs";
-    let x = "/srv/town/rig-b/lib/client.go";
-    let y = "/srv/town/rig-b/lib/server.go";
-    let p = "/srv/town/rig-a/tmp/notes.rs";
-    let q = "/srv/town/rig-a/tmp/scratch.rs";
+    let ast = "/srv/town/rig-a/src/ast.rs";
+    let lexer = "/srv/town/rig-a/src/lexer.rs";
+    let parser = "/srv/town/rig-a/src/parser.rs";
+    let client = "/srv/town/rig-b/lib/client.go";
+    let server = "/srv/town/rig-b/lib/server.go";
+    let notes = "/srv/town/rig-a/tmp/notes.rs";
+    let scratch = "/srv/town/rig-a/tmp/scratch.rs";
 
     let mut facts = Vec::new();
-    // Cluster 1: {a, b, c} co-read in 5 distinct sessions.
+    // Cluster 1: {ast, lexer, parser} co-read in 5 distinct sessions.
     for i in 0..5 {
         facts.push(reading_session(
             &format!("cluster1-s{i}"),
             false,
-            &[a, b, c],
+            &[ast, lexer, parser],
         ));
     }
-    // Cluster 2: {x, y} co-read in 4 distinct sessions.
+    // Cluster 2: {client, server} co-read in 4 distinct sessions.
     for i in 0..4 {
-        facts.push(reading_session(&format!("cluster2-s{i}"), false, &[x, y]));
+        facts.push(reading_session(
+            &format!("cluster2-s{i}"),
+            false,
+            &[client, server],
+        ));
     }
-    // Sub-threshold: {p, q} co-read in only 3 sessions (support < 4).
+    // Sub-threshold: {notes, scratch} co-read in only 3 sessions (support < 4).
     for i in 0..3 {
-        facts.push(reading_session(&format!("noise-s{i}"), false, &[p, q]));
+        facts.push(reading_session(
+            &format!("noise-s{i}"),
+            false,
+            &[notes, scratch],
+        ));
     }
     // Coordinator reading everything: excluded from pairwise metrics entirely.
-    facts.push(reading_session("coordinator", true, &[a, b, c, x, y, p, q]));
+    facts.push(reading_session(
+        "coordinator",
+        true,
+        &[ast, lexer, parser, client, server, notes, scratch],
+    ));
     facts
 }
 
@@ -103,7 +115,7 @@ fn read_clusters_matches_golden() {
     let result = read_clusters(&fixed_facts(), &opts());
     // Render through `serde_json::Value` so the field order matches how the
     // result appears inside the relations envelope (`json!(...)`).
-    let value = serde_json::to_value(&result).expect("to_value");
+    let value = serde_json::to_value(result).expect("to_value");
     let rendered = format!(
         "{}\n",
         serde_json::to_string_pretty(&value).expect("pretty json")

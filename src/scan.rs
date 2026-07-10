@@ -146,9 +146,7 @@ fn append_to_store(store: &mut Store, parsed: &ParsedSession, session: &SessionR
         .iter()
         .filter_map(UsageMessage::from_transcript_message)
         .collect::<Vec<_>>();
-    store
-        .usage_by_session
-        .push((session.clone(), usage));
+    store.usage_by_session.push((session.clone(), usage));
     for message in &parsed.messages {
         store.messages.push(stored_message_from(session, message));
     }

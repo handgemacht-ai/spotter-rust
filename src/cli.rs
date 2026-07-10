@@ -1413,7 +1413,9 @@ fn scan_audit(args: ScanAuditArgs, targets: &[PathBuf]) -> Result<()> {
     for path in targets.iter().take(args.limit) {
         reports.push(scan::audit_file(path)?);
     }
-    output(&reports, &args.format, || print_scan_audit_reports(&reports))
+    output(&reports, &args.format, || {
+        print_scan_audit_reports(&reports)
+    })
 }
 
 fn scan_errors(
@@ -1451,8 +1453,7 @@ fn scan_health(
             .usage_by_session
             .iter()
             .find(|(record, _)| record.id == session.id)
-            .map(|(_, messages)| messages.as_slice())
-            .unwrap_or(&[]);
+            .map_or([].as_slice(), |(_, messages)| messages.as_slice());
         let report = analytics::health_session_in(usage);
         output(&report, &args.format, || {
             print_health_report(&session_id, &report)
@@ -1767,10 +1768,10 @@ fn print_runs(runs: &[db::ToolCallRun]) {
 /// file on disk was larger than what was actually read in.
 fn format_lines_in_context(run: &db::ToolCallRun) -> String {
     match run.read_lines {
-        Some(lines) if run.read_truncated == Some(true) => match run.read_total_lines {
-            Some(total) => format!("{lines} of {total}"),
-            None => format!("{lines} (truncated)"),
-        },
+        Some(lines) if run.read_truncated == Some(true) => run.read_total_lines.map_or_else(
+            || format!("{lines} (truncated)"),
+            |total| format!("{lines} of {total}"),
+        ),
         Some(lines) => lines.to_string(),
         None => "-".to_string(),
     }

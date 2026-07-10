@@ -21,7 +21,7 @@ fn spotter(args: &[&str], db: &str, config: &str) -> assert_cmd::assert::Assert 
 }
 
 /// `scan search` reuses the same derivation + filter as `transcripts search`,
-/// so a Bash filter from a single fixture returns the same tool_use_id.
+/// so a Bash filter from a single fixture returns the same `tool_use_id`.
 #[test]
 fn scan_search_returns_expected_tool_use_id() {
     let (db, config) = temp_db_and_config();
@@ -36,7 +36,7 @@ fn scan_search_returns_expected_tool_use_id() {
     .stdout(predicate::str::contains("toolu_018GZVh9ymkrdx1TnR8reg5Y"));
 }
 
-/// `scan search --file-path` filters runs by file_path the same way the DB
+/// `scan search --file-path` filters runs by `file_path` the same way the DB
 /// path does. JSON output is a plain array of runs.
 #[test]
 fn scan_search_filters_by_file_path() {
@@ -135,15 +135,7 @@ fn scan_search_matches_transcripts_search_json() {
     .clone();
     let scan = spotter(
         &[
-            "scan",
-            "--file",
-            FIXTURE,
-            "search",
-            "--tool",
-            "Bash",
-            "--limit",
-            "20",
-            "--format",
+            "scan", "--file", FIXTURE, "search", "--tool", "Bash", "--limit", "20", "--format",
             "json",
         ],
         db_path,
@@ -412,9 +404,7 @@ fn scan_inspect_session_returns_runs() {
 fn scan_audit_reports_line_counts() {
     let (db, config) = temp_db_and_config();
     spotter(
-        &[
-            "scan", "--file", FIXTURE, "audit", "--format", "json",
-        ],
+        &["scan", "--file", FIXTURE, "audit", "--format", "json"],
         db.path().to_str().unwrap(),
         config.path().to_str().unwrap(),
     )
