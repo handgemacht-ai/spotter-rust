@@ -209,6 +209,43 @@ fn relations_flags_round_trip() {
 }
 
 #[test]
+fn cli_relations_table_summary_renders_counts() {
+    let db = NamedTempFile::new().expect("temp db");
+    let config = NamedTempFile::new().expect("temp config");
+    let output = Command::cargo_bin("spotter")
+        .expect("binary")
+        .args(["--db", db.path().to_str().unwrap()])
+        .args(["--config", config.path().to_str().unwrap()])
+        .args(["scan", "--root", FIXTURE_ROOT, "relations"])
+        .args(["--since", "0", "--format", "table"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(output).expect("utf8 summary");
+    assert!(
+        text.contains("Relations ("),
+        "table summary is missing its header: {text}"
+    );
+    for label in [
+        "cochange_session pairs",
+        "read_clusters clusters",
+        "rework files",
+        "friction files",
+        "cost files",
+        "docs_steer docs",
+        "discoverability files",
+        "provenance files",
+    ] {
+        assert!(
+            text.contains(label),
+            "table summary missing line {label}: {text}"
+        );
+    }
+}
+
+#[test]
 fn relations_under_filters_paths() {
     let envelope = run_relations(&["--since", "0", "--under", "assets", "--format", "json"]);
     let provenance = envelope["provenance"].as_array().expect("array");
