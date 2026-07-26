@@ -11,17 +11,27 @@ use std::sync::{
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use serde_json::{json, Value};
 use signal_hook::{consts::SIGINT, flag};
 
+use crate::analytics::GroupKey;
 use crate::session_facts::{self, RelationsOptions, SessionFacts};
 use crate::{
     analytics, config::Config, db, jsonl, metric_cochange_session, metric_cost,
     metric_discoverability, metric_docs_steer, metric_friction, metric_read_clusters,
     metric_rework, paths, scan,
 };
+
+/// Rendering mode for command results.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+enum OutputFormat {
+    /// Human-readable tables.
+    Table,
+    /// Pretty-printed JSON.
+    Json,
+}
 
 /// Run the Spotter CLI.
 pub fn run() -> Result<()> {
@@ -182,8 +192,8 @@ struct SearchArgs {
     limit: usize,
 
     /// Output format: table or json.
-    #[arg(long, default_value = "table")]
-    format: String,
+    #[arg(long, value_enum, default_value = "table")]
+    format: OutputFormat,
 
     /// Aggregate rows per session.
     #[arg(long)]
@@ -213,8 +223,8 @@ struct InspectArgs {
     with_messages: bool,
 
     /// Output format: table or json.
-    #[arg(long, default_value = "table")]
-    format: String,
+    #[arg(long, value_enum, default_value = "table")]
+    format: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -236,12 +246,12 @@ struct CompareArgs {
     command_contains: Option<String>,
 
     /// Group by field.
-    #[arg(long, default_value = "tool_name")]
-    group_by: String,
+    #[arg(long, value_enum, default_value = "tool_name")]
+    group_by: GroupKey,
 
     /// Output format: table or json.
-    #[arg(long, default_value = "table")]
-    format: String,
+    #[arg(long, value_enum, default_value = "table")]
+    format: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -258,13 +268,13 @@ struct AggregateArgs {
     #[arg(long)]
     tool: Option<String>,
 
-    /// Comma-separated fields: tool_name, status.
-    #[arg(long, default_value = "tool_name")]
-    group_by: String,
+    /// Comma-separated fields: tool_name, status, project, worktree, agent_id.
+    #[arg(long, value_enum, value_delimiter = ',', default_value = "tool_name")]
+    group_by: Vec<GroupKey>,
 
     /// Output format: table or json.
-    #[arg(long, default_value = "table")]
-    format: String,
+    #[arg(long, value_enum, default_value = "table")]
+    format: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -286,8 +296,8 @@ struct AuditArgs {
     limit: usize,
 
     /// Output format: table or json.
-    #[arg(long, default_value = "table")]
-    format: String,
+    #[arg(long, value_enum, default_value = "table")]
+    format: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -317,8 +327,8 @@ struct ErrorsArgs {
     classify: bool,
 
     /// Output format: table or json.
-    #[arg(long, default_value = "table")]
-    format: String,
+    #[arg(long, value_enum, default_value = "table")]
+    format: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -340,8 +350,8 @@ struct HealthArgs {
     limit: usize,
 
     /// Output format: table or json.
-    #[arg(long, default_value = "table")]
-    format: String,
+    #[arg(long, value_enum, default_value = "table")]
+    format: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -371,8 +381,8 @@ struct SequencesArgs {
     recovery: bool,
 
     /// Output format: table or json.
-    #[arg(long, default_value = "table")]
-    format: String,
+    #[arg(long, value_enum, default_value = "table")]
+    format: OutputFormat,
 }
 
 #[derive(Debug, Parser)]
@@ -474,8 +484,8 @@ struct RelationsArgs {
     fanout_cap: usize,
 
     /// Output format: table or json.
-    #[arg(long, default_value = "json")]
-    format: String,
+    #[arg(long, value_enum, default_value = "json")]
+    format: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -537,8 +547,8 @@ struct ScanSearchArgs {
     limit: usize,
 
     /// Output format: table or json.
-    #[arg(long, default_value = "table")]
-    format: String,
+    #[arg(long, value_enum, default_value = "table")]
+    format: OutputFormat,
 
     /// Aggregate rows per session.
     #[arg(long)]
@@ -552,8 +562,8 @@ struct ScanAuditArgs {
     limit: usize,
 
     /// Output format: table or json.
-    #[arg(long, default_value = "table")]
-    format: String,
+    #[arg(long, value_enum, default_value = "table")]
+    format: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -575,8 +585,8 @@ struct ReadScoresArgs {
     limit: usize,
 
     /// Output format: table or json.
-    #[arg(long, default_value = "json")]
-    format: String,
+    #[arg(long, value_enum, default_value = "json")]
+    format: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -625,11 +635,11 @@ fn inspect(args: InspectArgs, db_path: PathBuf) -> Result<()> {
     if args.with_messages {
         let context = analytics::message_context(&conn, &runs)?;
         let payload = InspectWithMessages { runs, context };
-        output(&payload, &args.format, || {
+        output(&payload, args.format, || {
             print_inspect_with_messages(&payload)
         })
     } else {
-        output(&runs, &args.format, || print_inspect_runs(&runs))
+        output(&runs, args.format, || print_inspect_runs(&runs))
     }
 }
 
@@ -651,9 +661,9 @@ fn compare(args: CompareArgs, db_path: PathBuf) -> Result<()> {
         &args.left_session,
         &args.right_session,
         &filters,
-        &args.group_by,
+        args.group_by,
     )?;
-    output(&result, &args.format, || {
+    output(&result, args.format, || {
         println!("Left cohort:");
         print_compare_groups(&result.left);
         println!("\nRight cohort:");
@@ -669,15 +679,8 @@ fn aggregate(args: AggregateArgs, db_path: PathBuf) -> Result<()> {
         tool: args.tool,
         ..analytics::RunFilters::default()
     };
-    let group_by = args
-        .group_by
-        .split(',')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    let result = analytics::aggregate(&conn, &filters, &group_by)?;
-    output(&result, &args.format, || print_aggregate(&result))
+    let result = analytics::aggregate(&conn, &filters, &args.group_by)?;
+    output(&result, args.format, || print_aggregate(&result))
 }
 
 fn audit(args: AuditArgs, db_path: PathBuf) -> Result<()> {
@@ -700,7 +703,7 @@ fn audit(args: AuditArgs, db_path: PathBuf) -> Result<()> {
         return Ok(());
     };
 
-    output(&reports, &args.format, || print_audit_reports(&reports))
+    output(&reports, args.format, || print_audit_reports(&reports))
 }
 
 #[derive(Debug, Serialize)]
@@ -773,7 +776,7 @@ fn errors(args: ErrorsArgs, db_path: PathBuf) -> Result<()> {
         ..analytics::RunFilters::default()
     };
     let result = analytics::error_analysis(&conn, &filters, args.top, args.classify)?;
-    output(&result, &args.format, || {
+    output(&result, args.format, || {
         print_errors(&result, args.classify)
     })
 }
@@ -782,7 +785,7 @@ fn health(args: HealthArgs, db_path: PathBuf) -> Result<()> {
     let conn = db::open(&db_path)?;
     if let Some(session) = args.session {
         let report = analytics::health_session(&conn, &session)?;
-        output(&report, &args.format, || {
+        output(&report, args.format, || {
             print_health_report(&session, &report)
         })
     } else {
@@ -792,7 +795,7 @@ fn health(args: HealthArgs, db_path: PathBuf) -> Result<()> {
             args.since.as_deref(),
             args.limit,
         )?;
-        output(&report, &args.format, || print_project_health(&report))
+        output(&report, args.format, || print_project_health(&report))
     }
 }
 
@@ -811,7 +814,7 @@ fn sequences(args: SequencesArgs, db_path: PathBuf) -> Result<()> {
         args.min_occurrences,
         args.recovery,
     )?;
-    output(&result, &args.format, || print_sequences(&result))
+    output(&result, args.format, || print_sequences(&result))
 }
 
 fn run_projects(command: ProjectsCommand, config_path: PathBuf, mut config: Config) -> Result<()> {
@@ -1177,7 +1180,7 @@ fn search(args: SearchArgs, db_path: PathBuf) -> Result<()> {
     let conn = db::open(&db_path)?;
     if let Some(content) = &args.content_contains {
         let hits = analytics::search_content(&conn, content, args.limit)?;
-        return output(&hits, &args.format, || {
+        return output(&hits, args.format, || {
             if hits.is_empty() {
                 println!("No results found.");
             } else {
@@ -1215,9 +1218,9 @@ fn search(args: SearchArgs, db_path: PathBuf) -> Result<()> {
 
     if args.group_by_session {
         let groups = group_runs_by_session(&runs);
-        output(&groups, &args.format, || print_session_groups(&groups))
+        output(&groups, args.format, || print_session_groups(&groups))
     } else {
-        output(&runs, &args.format, || print_runs(&runs))
+        output(&runs, args.format, || print_runs(&runs))
     }
 }
 
@@ -1276,7 +1279,7 @@ fn scan_search(
 
     if let Some(content) = args.content_contains.as_deref() {
         let hits = analytics::search_content_in(&store.messages, content, args.limit);
-        return output(&hits, &args.format, || {
+        return output(&hits, args.format, || {
             if hits.is_empty() {
                 println!("No results found.");
             } else {
@@ -1322,9 +1325,9 @@ fn scan_search(
 
     if args.group_by_session {
         let groups = group_runs_by_session(&runs);
-        output(&groups, &args.format, || print_session_groups(&groups))
+        output(&groups, args.format, || print_session_groups(&groups))
     } else {
-        output(&runs, &args.format, || print_runs(&runs))
+        output(&runs, args.format, || print_runs(&runs))
     }
 }
 
@@ -1349,11 +1352,11 @@ fn scan_inspect(
     if args.with_messages {
         let context = analytics::message_context_in(&store.messages, &runs);
         let payload = InspectWithMessages { runs, context };
-        output(&payload, &args.format, || {
+        output(&payload, args.format, || {
             print_inspect_with_messages(&payload)
         })
     } else {
-        output(&runs, &args.format, || print_inspect_runs(&runs))
+        output(&runs, args.format, || print_inspect_runs(&runs))
     }
 }
 
@@ -1374,9 +1377,9 @@ fn scan_compare(
         &args.left_session,
         &args.right_session,
         &filters,
-        &args.group_by,
+        args.group_by,
     );
-    output(&result, &args.format, || {
+    output(&result, args.format, || {
         println!("Left cohort:");
         print_compare_groups(&result.left);
         println!("\nRight cohort:");
@@ -1397,15 +1400,8 @@ fn scan_aggregate(
         tool: args.tool,
         ..analytics::RunFilters::default()
     };
-    let group_by = args
-        .group_by
-        .split(',')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    let result = analytics::aggregate_in(store.runs, &filters, &group_by);
-    output(&result, &args.format, || print_aggregate(&result))
+    let result = analytics::aggregate_in(store.runs, &filters, &args.group_by);
+    output(&result, args.format, || print_aggregate(&result))
 }
 
 fn scan_audit(args: ScanAuditArgs, targets: &[PathBuf]) -> Result<()> {
@@ -1413,9 +1409,7 @@ fn scan_audit(args: ScanAuditArgs, targets: &[PathBuf]) -> Result<()> {
     for path in targets.iter().take(args.limit) {
         reports.push(scan::audit_file(path)?);
     }
-    output(&reports, &args.format, || {
-        print_scan_audit_reports(&reports)
-    })
+    output(&reports, args.format, || print_scan_audit_reports(&reports))
 }
 
 fn scan_errors(
@@ -1433,7 +1427,7 @@ fn scan_errors(
         ..analytics::RunFilters::default()
     };
     let result = analytics::error_analysis_in(store.runs, &filters, args.top, args.classify);
-    output(&result, &args.format, || {
+    output(&result, args.format, || {
         print_errors(&result, args.classify)
     })
 }
@@ -1455,7 +1449,7 @@ fn scan_health(
             .find(|(record, _)| record.id == session.id)
             .map_or([].as_slice(), |(_, messages)| messages.as_slice());
         let report = analytics::health_session_in(usage);
-        output(&report, &args.format, || {
+        output(&report, args.format, || {
             print_health_report(&session_id, &report)
         })
     } else {
@@ -1465,7 +1459,7 @@ fn scan_health(
             args.since.as_deref(),
             args.limit,
         );
-        output(&report, &args.format, || print_project_health(&report))
+        output(&report, args.format, || print_project_health(&report))
     }
 }
 
@@ -1489,7 +1483,7 @@ fn scan_sequences(
         args.min_occurrences,
         args.recovery,
     );
-    output(&result, &args.format, || print_sequences(&result))
+    output(&result, args.format, || print_sequences(&result))
 }
 
 fn scan_read_scores(
@@ -1507,7 +1501,7 @@ fn scan_read_scores(
         limit: (args.limit > 0).then_some(args.limit),
     };
     let result = analytics::read_scores_in(store.runs, &options);
-    output(&result, &args.format, || print_read_scores(&result))
+    output(&result, args.format, || print_read_scores(&result))
 }
 
 fn print_read_scores(result: &analytics::ReadScoreResult) {
@@ -1613,7 +1607,7 @@ fn scan_relations(
         facts = session_facts::filter_under(facts, under);
     }
     let envelope = build_relations_envelope(&facts, &options);
-    output(&envelope, &args.format, || {
+    output(&envelope, args.format, || {
         print_relations_summary(&envelope)
     })
 }
@@ -1729,12 +1723,12 @@ fn group_runs_by_session(runs: &[db::ToolCallRun]) -> Vec<SessionGroup> {
         .collect()
 }
 
-fn output<T, F>(value: &T, format: &str, print_table: F) -> Result<()>
+fn output<T, F>(value: &T, format: OutputFormat, print_table: F) -> Result<()>
 where
     T: Serialize,
     F: FnOnce(),
 {
-    if format == "json" {
+    if format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(value)?);
     } else {
         print_table();

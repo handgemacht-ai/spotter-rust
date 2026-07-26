@@ -14,7 +14,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-use crate::jsonl::{content_blocks, ParsedSession, TranscriptMessage};
+use crate::jsonl::{content_blocks, is_known_content_block_type, ParsedSession, TranscriptMessage};
 
 const SCHEMA_VERSION: i32 = 5;
 
@@ -940,7 +940,12 @@ fn collect_tool_parts(
                     );
                 }
             }
-            _ => {}
+            // Parsing rejects unknown block types, so the remaining blocks are
+            // known ones Spotter derives no runs from (`text`, `thinking`, ...).
+            other => debug_assert!(
+                other.is_some_and(is_known_content_block_type),
+                "unvalidated content block reached run derivation: {other:?}"
+            ),
         }
     }
 }

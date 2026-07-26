@@ -1,5 +1,8 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
+use tempfile::NamedTempFile;
+
+const FIXTURE: &str = "tests/fixtures/transcripts/tool_heavy.jsonl";
 
 #[test]
 fn every_subcommand_has_non_empty_help() {
@@ -73,6 +76,137 @@ fn transcript_help_index_lists_supported_transcript_commands() {
     }
 
     assert!(!stdout.contains("slice.register"));
+}
+
+#[test]
+fn unknown_format_value_is_rejected() {
+    for args in [
+        vec!["transcripts", "search", "--format", "yaml"],
+        vec!["scan", "--file", FIXTURE, "aggregate", "--format", "yaml"],
+    ] {
+        spotter(&args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "invalid value 'yaml' for '--format <FORMAT>'",
+            ))
+            .stderr(predicate::str::contains("[possible values: table, json]"));
+    }
+}
+
+#[test]
+fn known_format_values_are_accepted() {
+    for format in ["table", "json"] {
+        spotter(&[
+            "scan",
+            "--file",
+            FIXTURE,
+            "aggregate",
+            "--format",
+            format,
+            "--group-by",
+            "tool_name,status",
+        ])
+        .assert()
+        .success();
+    }
+}
+
+#[test]
+fn unknown_group_by_key_is_rejected() {
+    for args in [
+        vec!["transcripts", "aggregate", "--group-by", "bogus"],
+        vec![
+            "scan",
+            "--file",
+            FIXTURE,
+            "aggregate",
+            "--group-by",
+            "tool_name,bogus",
+        ],
+        vec![
+            "scan",
+            "--file",
+            FIXTURE,
+            "compare",
+            "--left-session",
+            "a",
+            "--right-session",
+            "b",
+            "--group-by",
+            "bogus",
+        ],
+    ] {
+        spotter(&args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "invalid value 'bogus' for '--group-by <GROUP_BY>'",
+            ))
+            .stderr(predicate::str::contains(
+                "[possible values: tool_name, status, project, worktree, agent_id]",
+            ));
+    }
+}
+
+#[test]
+fn known_group_by_keys_are_accepted() {
+    for key in [
+        "tool_name",
+        "status",
+        "project",
+        "project_alias",
+        "worktree",
+        "worktree_name",
+        "agent_id",
+    ] {
+        spotter(&[
+            "scan",
+            "--file",
+            FIXTURE,
+            "aggregate",
+            "--group-by",
+            key,
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success();
+    }
+}
+
+#[test]
+fn unknown_config_key_fails_the_run() {
+    let config = NamedTempFile::new().expect("temp config");
+    std::fs::write(config.path(), "unknown_root_key = 1\n").expect("write config");
+
+    Command::cargo_bin("spotter")
+        .expect("binary")
+        .args([
+            "--config",
+            config.path().to_str().expect("utf8 config path"),
+            "projects",
+            "list",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown_root_key"));
+}
+
+/// Run the CLI against throwaway db/config paths so flag validation never
+/// depends on the developer's real Spotter state.
+fn spotter(args: &[&str]) -> Command {
+    let db = NamedTempFile::new().expect("temp db");
+    let config = NamedTempFile::new().expect("temp config");
+    let mut command = Command::cargo_bin("spotter").expect("binary");
+    command.args([
+        "--db",
+        db.path().to_str().expect("utf8 db path"),
+        "--config",
+        config.path().to_str().expect("utf8 config path"),
+    ]);
+    command.args(args);
+    command
 }
 
 #[test]

@@ -124,6 +124,28 @@ pub enum JsonlError {
         /// Unknown field name.
         field: String,
     },
+
+    /// A record carried a `type` outside the known set.
+    #[error("unknown JSONL record type on line {line}: {record_type} (known: {known})")]
+    UnknownRecordType {
+        /// One-based line number.
+        line: usize,
+        /// Unrecognized record `type` value.
+        record_type: String,
+        /// Comma-separated known record types.
+        known: String,
+    },
+
+    /// A content block carried a `type` outside the known set.
+    #[error("unknown content block type on line {line}: {block_type} (known: {known})")]
+    UnknownBlockType {
+        /// One-based line number.
+        line: usize,
+        /// Unrecognized block `type` value.
+        block_type: String,
+        /// Comma-separated known block types.
+        known: String,
+    },
 }
 
 #[allow(dead_code)]
@@ -317,6 +339,27 @@ struct RawUsage {
     speed: Option<Value>,
     iterations: Option<Value>,
     inference_geo: Option<Value>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawToolUseBlock {
+    r#type: Option<Value>,
+    id: Option<Value>,
+    name: Option<Value>,
+    input: Option<Value>,
+    caller: Option<Value>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawToolResultBlock {
+    r#type: Option<Value>,
+    tool_use_id: Option<Value>,
+    content: Option<Value>,
+    is_error: Option<Value>,
 }
 
 #[allow(dead_code)]
@@ -527,12 +570,13 @@ fn normalize_message(
     let message_content = message.and_then(|message| message.get("content"));
     let top_content = top.get("content");
     let content = normalize_content(message_content.or(top_content));
+    validate_content_blocks(&content, line)?;
     let usage_tokens = usage.map_or_else(UsageTokens::default, usage_tokens);
 
     Ok(TranscriptMessage {
         ordinal,
         source_scope: source_scope.to_string(),
-        normalized_type: normalize_type(record_type.as_deref()).to_string(),
+        normalized_type: normalize_type(record_type.as_deref(), line)?.to_string(),
         record_type,
         uuid: string_field(top, "uuid"),
         parent_uuid: string_field(top, "parentUuid"),
@@ -604,6 +648,55 @@ fn reject_unknown(
         });
     }
     Ok(())
+}
+
+fn validate_content_blocks(content: &Value, line: usize) -> Result<(), JsonlError> {
+    let Some(blocks) = content.get("blocks").and_then(Value::as_array) else {
+        return Ok(());
+    };
+
+    for block in blocks {
+        let block = block
+            .as_object()
+            .ok_or_else(|| unknown_block_type("<non-object>", line))?;
+        let block_type = block
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| unknown_block_type("<missing>", line))?;
+        if !is_known_content_block_type(block_type) {
+            return Err(unknown_block_type(block_type, line));
+        }
+
+        match block_type {
+            "tool_use" => {
+                reject_unknown(block, TOOL_USE_BLOCK_FIELDS, "content.tool_use", line)?;
+                serde_json::from_value::<RawToolUseBlock>(Value::Object(block.clone()))
+                    .map_err(|source| JsonlError::Decode { line, source })?;
+            }
+            "tool_result" => {
+                reject_unknown(block, TOOL_RESULT_BLOCK_FIELDS, "content.tool_result", line)?;
+                serde_json::from_value::<RawToolResultBlock>(Value::Object(block.clone()))
+                    .map_err(|source| JsonlError::Decode { line, source })?;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+fn unknown_block_type(block_type: &str, line: usize) -> JsonlError {
+    JsonlError::UnknownBlockType {
+        line,
+        block_type: block_type.to_string(),
+        known: CONTENT_BLOCK_TYPES.join(", "),
+    }
+}
+
+/// Return whether a content block `type` is one Spotter recognizes.
+#[must_use]
+pub fn is_known_content_block_type(block_type: &str) -> bool {
+    CONTENT_BLOCK_TYPES.contains(&block_type)
 }
 
 fn validate_usage_children(usage: &Map<String, Value>, line: usize) -> Result<(), JsonlError> {
@@ -708,8 +801,8 @@ fn usage_tokens(usage: &Map<String, Value>) -> UsageTokens {
     }
 }
 
-fn normalize_type(raw_type: Option<&str>) -> &'static str {
-    match raw_type {
+fn normalize_type(raw_type: Option<&str>, line: usize) -> Result<&'static str, JsonlError> {
+    let normalized = match raw_type {
         Some("user" | "human") => "user",
         Some("assistant") => "assistant",
         Some("tool_use") => "tool_use",
@@ -717,6 +810,7 @@ fn normalize_type(raw_type: Option<&str>) -> &'static str {
         Some("progress") => "progress",
         Some("thinking") => "thinking",
         Some("file_history_snapshot" | "file-history-snapshot") => "file_history_snapshot",
+        Some("file-history-delta") => "file_history_delta",
         Some("queue-operation") => "queue_operation",
         Some("last-prompt") => "last_prompt",
         Some("attachment") => "attachment",
@@ -728,8 +822,21 @@ fn normalize_type(raw_type: Option<&str>) -> &'static str {
         Some("agent-name") => "agent_name",
         Some("worktree-state") => "worktree_state",
         Some("pr-link") => "pr_link",
-        None | Some(_) => "system",
-    }
+        Some("started") => "started",
+        Some("relocated") => "relocated",
+        Some("bridge-session") => "bridge_session",
+        Some("frame-link") => "frame_link",
+        Some("fork-context-ref") => "fork_context_ref",
+        None | Some("system") => "system",
+        Some(other) => {
+            return Err(JsonlError::UnknownRecordType {
+                line,
+                record_type: other.to_string(),
+                known: RECORD_TYPES.join(", "),
+            })
+        }
+    };
+    Ok(normalized)
 }
 
 const TOP_LEVEL_FIELDS: &[&str] = &[
@@ -855,6 +962,57 @@ const CACHE_CREATION_FIELDS: &[&str] = &["ephemeral_5m_input_tokens", "ephemeral
 
 const SERVER_TOOL_USE_FIELDS: &[&str] = &["web_search_requests", "web_fetch_requests"];
 
+/// Raw record `type` values `normalize_type` accepts, in match order.
+const RECORD_TYPES: &[&str] = &[
+    "user",
+    "human",
+    "assistant",
+    "tool_use",
+    "tool_result",
+    "result",
+    "progress",
+    "thinking",
+    "file_history_snapshot",
+    "file-history-snapshot",
+    "file-history-delta",
+    "queue-operation",
+    "last-prompt",
+    "attachment",
+    "permission-mode",
+    "mode",
+    "custom-title",
+    "ai-title",
+    "agent-setting",
+    "agent-name",
+    "worktree-state",
+    "pr-link",
+    "started",
+    "relocated",
+    "bridge-session",
+    "frame-link",
+    "fork-context-ref",
+    "system",
+];
+
+/// Content block `type` values Spotter recognizes; others fail parsing even
+/// when Spotter derives nothing from them.
+const CONTENT_BLOCK_TYPES: &[&str] = &[
+    "text",
+    "thinking",
+    "redacted_thinking",
+    "tool_use",
+    "tool_result",
+    "server_tool_use",
+    "web_search_tool_result",
+    "image",
+    "document",
+    "fallback",
+];
+
+const TOOL_USE_BLOCK_FIELDS: &[&str] = &["type", "id", "name", "input", "caller"];
+
+const TOOL_RESULT_BLOCK_FIELDS: &[&str] = &["type", "tool_use_id", "content", "is_error"];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -930,7 +1088,155 @@ mod tests {
         assert_eq!(parsed.session_id.as_deref(), Some("session-a"));
     }
 
+    #[test]
+    fn accepts_every_known_record_type() {
+        for record_type in RECORD_TYPES {
+            let mut value = base_message();
+            value
+                .as_object_mut()
+                .expect("object")
+                .insert("type".to_string(), json!(record_type));
+
+            let parsed = normalize_message(value, 0, "main", 1)
+                .unwrap_or_else(|error| panic!("{record_type} should parse: {error}"));
+
+            assert_eq!(parsed.record_type.as_deref(), Some(*record_type));
+        }
+    }
+
+    #[test]
+    fn record_without_a_type_stays_system() {
+        let mut value = base_message();
+        value.as_object_mut().expect("object").remove("type");
+
+        let parsed = normalize_message(value, 0, "main", 1).expect("typeless record should parse");
+
+        assert_eq!(parsed.normalized_type, "system");
+    }
+
+    #[test]
+    fn accepts_known_content_block_types() {
+        for block_type in CONTENT_BLOCK_TYPES {
+            let mut value = base_message();
+            value["message"]["content"] = json!([{"type": block_type}]);
+
+            normalize_message(value, 0, "main", 1)
+                .unwrap_or_else(|error| panic!("{block_type} block should parse: {error}"));
+        }
+    }
+
+    #[test]
+    fn accepts_tool_blocks_with_known_fields() {
+        let mut value = base_message();
+        value["message"]["content"] = json!([
+            {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": "Bash",
+                "input": {"command": "ls"},
+                "caller": "assistant"
+            },
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_1",
+                "content": "ok",
+                "is_error": false
+            }
+        ]);
+
+        let parsed = normalize_message(value, 0, "main", 1).expect("tool blocks should parse");
+
+        assert_eq!(content_blocks(&parsed.content).len(), 2);
+    }
+
+    #[test]
+    fn rejects_non_object_content_block() {
+        let mut value = base_message();
+        value["message"]["content"] = json!(["plain string block"]);
+
+        let error = normalize_message(value, 0, "main", 1).expect_err("non-object block rejected");
+
+        assert!(
+            matches!(&error, JsonlError::UnknownBlockType { block_type, .. } if block_type == "<non-object>"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn rejects_content_block_without_a_type() {
+        let mut value = base_message();
+        value["message"]["content"] = json!([{"text": "hello"}]);
+
+        let error = normalize_message(value, 0, "main", 1).expect_err("typeless block rejected");
+
+        assert!(
+            matches!(&error, JsonlError::UnknownBlockType { block_type, .. } if block_type == "<missing>"),
+            "unexpected error: {error}"
+        );
+    }
+
     proptest! {
+        #[test]
+        fn rejects_unknown_record_type(extra in "[a-z]{4,12}") {
+            let mut value = base_message();
+            let record_type = format!("future-{extra}");
+            value.as_object_mut().expect("object").insert("type".to_string(), json!(record_type));
+
+            let error = normalize_message(value, 0, "main", 1).expect_err("unknown record type rejected");
+
+            assert!(
+                matches!(&error, JsonlError::UnknownRecordType { record_type: found, .. } if found == &record_type),
+                "unexpected error: {error}"
+            );
+        }
+
+        #[test]
+        fn rejects_unknown_content_block_type(extra in "[a-z]{4,12}") {
+            let mut value = base_message();
+            let block_type = format!("future_{extra}");
+            value["message"]["content"] = json!([{"type": block_type}]);
+
+            let error = normalize_message(value, 0, "main", 1).expect_err("unknown block type rejected");
+
+            assert!(
+                matches!(&error, JsonlError::UnknownBlockType { block_type: found, .. } if found == &block_type),
+                "unexpected error: {error}"
+            );
+        }
+
+        #[test]
+        fn rejects_unknown_tool_use_block_field(extra in "[a-z]{4,12}") {
+            let mut value = base_message();
+            let extra = format!("unknown_{extra}");
+            value["message"]["content"] = json!([{
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": "Bash",
+                "input": {},
+                extra: true
+            }]);
+
+            let error = normalize_message(value, 0, "main", 1).expect_err("unknown key rejected");
+
+            assert!(matches!(error, JsonlError::UnknownField { level: "content.tool_use", .. }));
+        }
+
+        #[test]
+        fn rejects_unknown_tool_result_block_field(extra in "[a-z]{4,12}") {
+            let mut value = base_message();
+            let extra = format!("unknown_{extra}");
+            value["message"]["content"] = json!([{
+                "type": "tool_result",
+                "tool_use_id": "toolu_1",
+                "content": "ok",
+                extra: true
+            }]);
+
+            let error = normalize_message(value, 0, "main", 1).expect_err("unknown key rejected");
+
+            assert!(matches!(error, JsonlError::UnknownField { level: "content.tool_result", .. }));
+        }
+
         #[test]
         fn rejects_unknown_top_level(extra in "[a-z]{4,12}") {
             let mut value = base_message();

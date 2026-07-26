@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 /// User configuration stored at `~/.config/spotter/config.toml` by default.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     /// Transcript roots that Spotter may scan.
     #[serde(default)]
@@ -20,6 +21,7 @@ pub struct Config {
 
 /// A configured project path and its CLI-friendly alias.
 #[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectConfig {
     /// Short name used in command output and `--project` filters.
     pub alias: String,
@@ -156,5 +158,61 @@ mod tests {
         config.write(&path).expect("write config");
         let loaded = Config::read_or_default(&path).expect("read config");
         assert_eq!(loaded.projects, config.projects);
+    }
+
+    #[test]
+    fn known_config_keys_still_parse() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("config.toml");
+        fs::write(
+            &path,
+            "transcript_roots = [\"/tmp/roots\"]\n\n[[projects]]\nalias = \"app\"\npath = \"/work/app\"\n",
+        )
+        .expect("write config");
+
+        let config = Config::read_or_default(&path).expect("known keys parse");
+
+        assert_eq!(config.transcript_roots, vec![PathBuf::from("/tmp/roots")]);
+        assert_eq!(
+            config.projects,
+            vec![ProjectConfig {
+                alias: "app".to_string(),
+                path: PathBuf::from("/work/app"),
+            }]
+        );
+    }
+
+    #[test]
+    fn unknown_top_level_config_key_is_rejected() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("config.toml");
+        fs::write(&path, "transcript_roots = []\nunknown_root_key = 1\n").expect("write config");
+
+        let error = Config::read_or_default(&path).expect_err("unknown key rejected");
+
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains("unknown_root_key"),
+            "error should name the offending key: {rendered}"
+        );
+    }
+
+    #[test]
+    fn unknown_project_config_key_is_rejected() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("config.toml");
+        fs::write(
+            &path,
+            "[[projects]]\nalias = \"app\"\npath = \"/work/app\"\nunknown_project_key = true\n",
+        )
+        .expect("write config");
+
+        let error = Config::read_or_default(&path).expect_err("unknown key rejected");
+
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains("unknown_project_key"),
+            "error should name the offending key: {rendered}"
+        );
     }
 }

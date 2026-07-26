@@ -4,12 +4,45 @@ use std::collections::{BTreeMap, HashMap};
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use clap::ValueEnum;
 use regex::Regex;
 use rusqlite::{params, Connection};
 use serde::Serialize;
 
 use crate::db::{self, MessageHit, SessionRecord, ToolCallRun};
 use crate::jsonl::TranscriptMessage;
+
+/// A tool-call field that `compare` and `aggregate` can group by.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+#[value(rename_all = "snake_case")]
+pub enum GroupKey {
+    /// Group by tool name.
+    ToolName,
+    /// Group by run status.
+    Status,
+    /// Group by project alias.
+    #[value(alias = "project_alias")]
+    Project,
+    /// Group by worktree name.
+    #[value(alias = "worktree_name")]
+    Worktree,
+    /// Group by subagent id.
+    AgentId,
+}
+
+impl GroupKey {
+    /// Return the canonical key name used in grouped output.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ToolName => "tool_name",
+            Self::Status => "status",
+            Self::Project => "project",
+            Self::Worktree => "worktree",
+            Self::AgentId => "agent_id",
+        }
+    }
+}
 
 /// Common tool-call filters.
 #[derive(Debug, Default)]
@@ -669,7 +702,7 @@ pub fn compare(
     left_sessions: &[String],
     right_sessions: &[String],
     filters: &RunFilters,
-    group_by: &str,
+    group_by: GroupKey,
 ) -> Result<CompareResult> {
     Ok(compare_in(
         db::list_runs(conn)?,
@@ -686,7 +719,7 @@ pub fn compare_in(
     left_sessions: &[String],
     right_sessions: &[String],
     filters: &RunFilters,
-    group_by: &str,
+    group_by: GroupKey,
 ) -> CompareResult {
     let runs = filter_runs(runs, filters);
     let left = cohort_runs(&runs, left_sessions);
@@ -701,7 +734,7 @@ pub fn compare_in(
 pub fn aggregate(
     conn: &Connection,
     filters: &RunFilters,
-    group_by: &[String],
+    group_by: &[GroupKey],
 ) -> Result<AggregateResult> {
     Ok(aggregate_in(db::list_runs(conn)?, filters, group_by))
 }
@@ -710,7 +743,7 @@ pub fn aggregate(
 pub fn aggregate_in(
     runs: Vec<ToolCallRun>,
     filters: &RunFilters,
-    group_by: &[String],
+    group_by: &[GroupKey],
 ) -> AggregateResult {
     let runs = filter_runs(runs, filters);
     let groups = aggregate_groups(&runs, group_by);
@@ -1191,7 +1224,7 @@ fn cohort_runs(runs: &[ToolCallRun], sessions: &[String]) -> Vec<ToolCallRun> {
         .collect()
 }
 
-fn compare_groups(runs: &[ToolCallRun], group_by: &str) -> Vec<CompareGroup> {
+fn compare_groups(runs: &[ToolCallRun], group_by: GroupKey) -> Vec<CompareGroup> {
     let mut grouped = BTreeMap::<String, Vec<&ToolCallRun>>::new();
     for run in runs {
         grouped
@@ -1209,16 +1242,16 @@ fn compare_groups(runs: &[ToolCallRun], group_by: &str) -> Vec<CompareGroup> {
         .collect()
 }
 
-fn aggregate_groups(runs: &[ToolCallRun], group_by: &[String]) -> Vec<AggregateGroup> {
+fn aggregate_groups(runs: &[ToolCallRun], group_by: &[GroupKey]) -> Vec<AggregateGroup> {
     let keys = if group_by.is_empty() {
-        vec!["tool_name".to_string()]
+        vec![GroupKey::ToolName]
     } else {
         group_by.to_vec()
     };
     let mut grouped = BTreeMap::<Vec<String>, Vec<&ToolCallRun>>::new();
     for run in runs {
         grouped
-            .entry(keys.iter().map(|key| group_value(run, key)).collect())
+            .entry(keys.iter().map(|key| group_value(run, *key)).collect())
             .or_default()
             .push(run);
     }
@@ -1234,7 +1267,11 @@ fn aggregate_groups(runs: &[ToolCallRun], group_by: &[String]) -> Vec<AggregateG
                 .collect::<Vec<_>>();
             durations.sort_unstable();
             AggregateGroup {
-                key: keys.iter().cloned().zip(values).collect(),
+                key: keys
+                    .iter()
+                    .map(|key| key.as_str().to_string())
+                    .zip(values)
+                    .collect(),
                 count,
                 errors,
                 error_pct: if count == 0 {
@@ -1256,14 +1293,13 @@ fn aggregate_groups(runs: &[ToolCallRun], group_by: &[String]) -> Vec<AggregateG
     rows
 }
 
-fn group_value(run: &ToolCallRun, key: &str) -> String {
+fn group_value(run: &ToolCallRun, key: GroupKey) -> String {
     match key {
-        "tool_name" => run.tool_name.clone(),
-        "status" => run.status.clone(),
-        "project" | "project_alias" => run.project_alias.clone(),
-        "worktree" | "worktree_name" => run.worktree_name.clone().unwrap_or_default(),
-        "agent_id" => run.agent_id.clone().unwrap_or_default(),
-        other => format!("unsupported:{other}"),
+        GroupKey::ToolName => run.tool_name.clone(),
+        GroupKey::Status => run.status.clone(),
+        GroupKey::Project => run.project_alias.clone(),
+        GroupKey::Worktree => run.worktree_name.clone().unwrap_or_default(),
+        GroupKey::AgentId => run.agent_id.clone().unwrap_or_default(),
     }
 }
 
@@ -1798,16 +1834,15 @@ mod tests {
         assert!(!contains_opt(None, Some("needle")));
         assert!(contains_opt(None, None));
 
-        assert_eq!(group_value(&first, "tool_name"), "Bash");
-        assert_eq!(group_value(&first, "status"), "error");
-        assert_eq!(group_value(&first, "project"), "project-a");
-        assert_eq!(group_value(&first, "worktree"), "worktree-a");
-        assert_eq!(group_value(&first, "agent_id"), "agent-a");
-        assert_eq!(group_value(&first, "unknown"), "unsupported:unknown");
+        assert_eq!(group_value(&first, GroupKey::ToolName), "Bash");
+        assert_eq!(group_value(&first, GroupKey::Status), "error");
+        assert_eq!(group_value(&first, GroupKey::Project), "project-a");
+        assert_eq!(group_value(&first, GroupKey::Worktree), "worktree-a");
+        assert_eq!(group_value(&first, GroupKey::AgentId), "agent-a");
 
-        let compare = compare_groups(&runs, "tool_name");
+        let compare = compare_groups(&runs, GroupKey::ToolName);
         assert_eq!(compare.len(), 2);
-        let aggregate = aggregate_groups(&runs, &["status".to_string(), "tool_name".to_string()]);
+        let aggregate = aggregate_groups(&runs, &[GroupKey::Status, GroupKey::ToolName]);
         assert_eq!(aggregate.len(), 2);
         assert_eq!(average_duration([&first, &second].into_iter()), Some(102));
         assert_eq!(average_duration(std::iter::empty()), None);
