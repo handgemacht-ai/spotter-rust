@@ -55,6 +55,17 @@ fn migration_from_v2_snapshots_backfills_and_preserves_data() {
         .expect("search text");
     assert_eq!(search_text, "{\"text\":\"hello\"}");
 
+    let has_effort_column = conn
+        .prepare("PRAGMA table_info(messages)")
+        .expect("table info")
+        .query_map([], |row| row.get::<_, String>(1))
+        .expect("columns")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("collect columns")
+        .iter()
+        .any(|name| name == "effort");
+    assert!(has_effort_column, "migrated db must gain the effort column");
+
     for index in [
         "idx_messages_timestamp",
         "idx_messages_tool_use",
@@ -105,6 +116,74 @@ fn newer_schema_version_is_rejected_without_snapshot() {
             .expect("temp file name")
     ));
     assert!(!backup.exists(), "newer schema should not be snapshotted");
+}
+
+#[test]
+fn old_shape_messages_fts_is_rebuilt_with_chunks() {
+    let db_file = NamedTempFile::new().expect("temp db");
+    let mut conn = db::open(db_file.path()).expect("open db");
+    sync_once(
+        &mut conn,
+        Path::new("tests/fixtures/transcripts/tool_heavy.jsonl"),
+        &Config::default(),
+    );
+
+    // Downgrade to the pre-chunking FTS shape (no chunk_index column).
+    conn.execute_batch(
+        "
+        DROP TABLE IF EXISTS messages_fts;
+        CREATE VIRTUAL TABLE messages_fts USING fts5(
+            session_id UNINDEXED,
+            ordinal UNINDEXED,
+            content
+        );
+        INSERT INTO messages_fts(session_id, ordinal, content) \
+         SELECT session_id, ordinal, search_text FROM messages;
+        ",
+    )
+    .expect("downgrade fts shape");
+
+    // Ranked search must rebuild transparently into the chunked shape.
+    let hits = spotter::analytics::search_content(&conn, "phoenix", 10, false)
+        .expect("ranked search on migrated db");
+    assert!(!hits.is_empty());
+
+    let has_chunk_index = conn
+        .prepare("PRAGMA table_info(messages_fts)")
+        .expect("table info")
+        .query_map([], |row| row.get::<_, String>(1))
+        .expect("columns")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("collect columns")
+        .iter()
+        .any(|name| name == "chunk_index");
+    assert!(has_chunk_index, "messages_fts must gain chunk_index");
+}
+
+#[test]
+fn effort_round_trips_into_messages_table() {
+    let db_file = NamedTempFile::new().expect("temp db");
+    let mut conn = db::open(db_file.path()).expect("open db");
+    let mut session = parsed_session_with_tool_id("session-effort", "toolu_effort", "echo hi");
+    session.messages[0].effort = Some("xhigh".to_string());
+    db::ingest_session(
+        &mut conn,
+        &session,
+        Path::new("/tmp/effort.jsonl"),
+        "fixture",
+        Path::new("/tmp"),
+        None,
+    )
+    .expect("ingest");
+
+    let effort: Option<String> = conn
+        .query_row(
+            "SELECT effort FROM messages WHERE session_id = 'session-effort' AND ordinal = 0",
+            [],
+            |row| row.get(0),
+        )
+        .expect("effort column");
+    assert_eq!(effort.as_deref(), Some("xhigh"));
 }
 
 #[test]
@@ -356,6 +435,7 @@ fn transcript_message(
         cache_read_input_tokens: None,
         cache_creation_input_tokens: None,
         model: None,
+        effort: None,
     }
 }
 

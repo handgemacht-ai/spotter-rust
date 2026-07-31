@@ -1,6 +1,6 @@
 //! Command-line interface implementation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -46,6 +46,14 @@ pub fn run() -> Result<()> {
         Command::Projects(command) => run_projects(command, config_path, config),
         Command::Init(args) => init(args, config_path),
         Command::Scan(command) => run_scan(command, &config, &cancel),
+        Command::Embed(command) => match command.command {
+            EmbedSubcommand::Init(args) => {
+                let dir = paths::model_dir(args.model_dir)?;
+                crate::embed::download_model(&dir)?;
+                println!("Embedding model ready at {}", dir.display());
+                Ok(())
+            }
+        },
     }
 }
 
@@ -92,6 +100,27 @@ enum Command {
     Init(InitArgs),
     /// Query JSONL transcripts directly, without the SQLite DB.
     Scan(ScanCommand),
+    /// Manage the local embedding model.
+    Embed(EmbedCommand),
+}
+
+#[derive(Debug, Parser)]
+struct EmbedCommand {
+    #[command(subcommand)]
+    command: EmbedSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum EmbedSubcommand {
+    /// Download the local embedding model into the cache directory.
+    Init(EmbedInitArgs),
+}
+
+#[derive(Debug, Args)]
+struct EmbedInitArgs {
+    /// Override the embedding model cache directory.
+    #[arg(long)]
+    model_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -120,6 +149,125 @@ enum TranscriptSubcommand {
     Health(HealthArgs),
     /// Find tool call patterns and retries.
     Sequences(SequencesArgs),
+    /// One-call dimensional overview of a scope, for anomaly discovery.
+    Profile(ProfileArgs),
+    /// Draw a stratified, seeded sample of tool-call runs.
+    Sample(SampleArgs),
+    /// Find runs similar to an exemplar run via local embeddings.
+    Similar(SimilarArgs),
+}
+
+#[derive(Debug, Args)]
+struct SimilarArgs {
+    /// Exemplar run id (<session_id>:<tool_use_id>).
+    #[arg(long, value_name = "SESSION_ID:TOOL_USE_ID")]
+    to_run: String,
+
+    /// Number of similar runs to emit.
+    #[arg(long, short = 'n', default_value_t = 10)]
+    count: usize,
+
+    /// Filter by project alias.
+    #[arg(long)]
+    project: Option<String>,
+
+    /// Filter by session id.
+    #[arg(long)]
+    session: Option<String>,
+
+    /// Only sessions/runs after this date.
+    #[arg(long)]
+    since: Option<String>,
+
+    /// Filter by tool name.
+    #[arg(long)]
+    tool: Option<String>,
+
+    /// Filter by status.
+    #[arg(long)]
+    status: Option<String>,
+
+    /// Override the embedding model cache directory.
+    #[arg(long)]
+    model_dir: Option<PathBuf>,
+
+    /// Output format: table or json.
+    #[arg(long, value_enum, default_value = "json")]
+    format: OutputFormat,
+
+    /// Keep only these top-level JSON keys (repeatable, comma-separated). Ignored for table output.
+    #[arg(long, value_delimiter = ',', value_name = "KEYS")]
+    fields: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct SampleArgs {
+    /// Filter by project alias.
+    #[arg(long)]
+    project: Option<String>,
+
+    /// Filter by session id.
+    #[arg(long)]
+    session: Option<String>,
+
+    /// Only sessions/runs after this date.
+    #[arg(long)]
+    since: Option<String>,
+
+    /// Filter by tool name.
+    #[arg(long)]
+    tool: Option<String>,
+
+    /// Filter by status.
+    #[arg(long)]
+    status: Option<String>,
+
+    /// Stratify sampling by tool_name, status, category, or session.
+    #[arg(long, value_enum, default_value = "tool_name")]
+    stratify_by: analytics::StrataKey,
+
+    /// Total runs to emit.
+    #[arg(long, short = 'n', default_value_t = 10)]
+    count: usize,
+
+    /// Sampling seed: same seed + same corpus draws the same runs.
+    #[arg(long, default_value_t = 42)]
+    seed: u64,
+
+    /// Output format: table or json.
+    #[arg(long, value_enum, default_value = "json")]
+    format: OutputFormat,
+
+    /// Keep only these top-level JSON keys (repeatable, comma-separated). Ignored for table output.
+    #[arg(long, value_delimiter = ',', value_name = "KEYS")]
+    fields: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct ProfileArgs {
+    /// Profile a single session.
+    #[arg(long)]
+    session: Option<String>,
+
+    /// Filter by project alias.
+    #[arg(long)]
+    project: Option<String>,
+
+    /// Only sessions/runs after this date.
+    #[arg(long)]
+    since: Option<String>,
+
+    /// Max entries per capped section (error patterns, outliers, flagged sessions).
+    #[arg(long, default_value_t = 5)]
+    top: usize,
+
+    /// Output format: table or json.
+    #[arg(long, value_enum, default_value = "json")]
+    format: OutputFormat,
+
+    /// Keep only these top-level JSON keys (repeatable, comma-separated). Ignored for table output.
+    #[arg(long, value_delimiter = ',', value_name = "KEYS")]
+    fields: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -167,9 +315,13 @@ struct SearchArgs {
     #[arg(long)]
     file_path: Option<String>,
 
-    /// Search transcript message content.
+    /// Search transcript message content (ranked BM25 full-text match).
     #[arg(long)]
     content_contains: Option<String>,
+
+    /// Match --content-contains as an exact phrase instead of ranked terms.
+    #[arg(long)]
+    exact: bool,
 
     /// Minimum duration in milliseconds.
     #[arg(long)]
@@ -198,17 +350,29 @@ struct SearchArgs {
     /// Aggregate rows per session.
     #[arg(long)]
     group_by_session: bool,
+
+    /// Keep only these top-level JSON keys (repeatable, comma-separated). Ignored for table output.
+    #[arg(long, value_delimiter = ',', value_name = "KEYS")]
+    fields: Vec<String>,
 }
 
 #[derive(Debug, Args)]
 struct InspectArgs {
-    /// Session ID (required).
-    #[arg(long)]
-    session: String,
+    /// Session ID (required unless --run is given).
+    #[arg(long, required_unless_present = "run")]
+    session: Option<String>,
 
     /// Filter to a specific tool use ID.
     #[arg(long)]
     tool_use_id: Option<String>,
+
+    /// Drill down to one run by its stable id (<session_id>:<tool_use_id>).
+    #[arg(long, value_name = "SESSION_ID:TOOL_USE_ID", conflicts_with_all = ["session", "tool_use_id"])]
+    run: Option<String>,
+
+    /// Keep only runs overlapping this message ordinal window (<min>:<max>).
+    #[arg(long, value_name = "MIN:MAX")]
+    ordinals: Option<String>,
 
     /// Number of surrounding runs to include.
     #[arg(long)]
@@ -225,6 +389,10 @@ struct InspectArgs {
     /// Output format: table or json.
     #[arg(long, value_enum, default_value = "table")]
     format: OutputFormat,
+
+    /// Keep only these top-level JSON keys (repeatable, comma-separated). Ignored for table output.
+    #[arg(long, value_delimiter = ',', value_name = "KEYS")]
+    fields: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -275,6 +443,10 @@ struct AggregateArgs {
     /// Output format: table or json.
     #[arg(long, value_enum, default_value = "table")]
     format: OutputFormat,
+
+    /// Keep only these top-level JSON keys (repeatable, comma-separated). Ignored for table output.
+    #[arg(long, value_delimiter = ',', value_name = "KEYS")]
+    fields: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -329,6 +501,10 @@ struct ErrorsArgs {
     /// Output format: table or json.
     #[arg(long, value_enum, default_value = "table")]
     format: OutputFormat,
+
+    /// Keep only these top-level JSON keys (repeatable, comma-separated). Ignored for table output.
+    #[arg(long, value_delimiter = ',', value_name = "KEYS")]
+    fields: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -463,6 +639,10 @@ enum ScanSubcommand {
     Health(HealthArgs),
     /// Find tool call patterns and retries.
     Sequences(SequencesArgs),
+    /// One-call dimensional overview of a scope, for anomaly discovery.
+    Profile(ProfileArgs),
+    /// Draw a stratified, seeded sample of tool-call runs.
+    Sample(SampleArgs),
     /// Score how often files are opened via the Read tool.
     ReadScores(ReadScoresArgs),
     /// Mine cross-file usage relations from transcripts.
@@ -518,9 +698,13 @@ struct ScanSearchArgs {
     #[arg(long)]
     file_path: Option<String>,
 
-    /// Search transcript message content (substring, case-insensitive).
+    /// Search transcript message content (ranked BM25 full-text match).
     #[arg(long)]
     content_contains: Option<String>,
+
+    /// Match --content-contains as an exact phrase instead of ranked terms.
+    #[arg(long)]
+    exact: bool,
 
     /// Minimum duration in milliseconds.
     #[arg(long)]
@@ -553,6 +737,10 @@ struct ScanSearchArgs {
     /// Aggregate rows per session.
     #[arg(long)]
     group_by_session: bool,
+
+    /// Keep only these top-level JSON keys (repeatable, comma-separated). Ignored for table output.
+    #[arg(long, value_delimiter = ',', value_name = "KEYS")]
+    fields: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -616,6 +804,9 @@ fn run_transcripts(
         Some(TranscriptSubcommand::Errors(args)) => errors(args, db_path),
         Some(TranscriptSubcommand::Health(args)) => health(args, db_path),
         Some(TranscriptSubcommand::Sequences(args)) => sequences(args, db_path),
+        Some(TranscriptSubcommand::Profile(args)) => profile(args, db_path),
+        Some(TranscriptSubcommand::Sample(args)) => sample(args, db_path),
+        Some(TranscriptSubcommand::Similar(args)) => similar(args, db_path),
         None => {
             print_transcripts_index();
             Ok(())
@@ -625,22 +816,71 @@ fn run_transcripts(
 
 fn inspect(args: InspectArgs, db_path: PathBuf) -> Result<()> {
     let conn = db::open(&db_path)?;
+    let target = resolve_inspect_target(&args)?;
     let runs = analytics::inspect_runs(
         &conn,
-        &args.session,
-        args.tool_use_id.as_deref(),
+        &target.session,
+        target.tool_use_id.as_deref(),
         args.status.as_deref(),
         args.context,
+        target.ordinals,
     )?;
     if args.with_messages {
         let context = analytics::message_context(&conn, &runs)?;
         let payload = InspectWithMessages { runs, context };
-        output(&payload, args.format, || {
+        output_projected(&payload, args.format, &args.fields, || {
             print_inspect_with_messages(&payload)
         })
     } else {
-        output(&runs, args.format, || print_inspect_runs(&runs))
+        output_projected(&runs, args.format, &args.fields, || {
+            print_inspect_runs(&runs)
+        })
     }
+}
+
+struct InspectTarget {
+    session: String,
+    tool_use_id: Option<String>,
+    ordinals: Option<(i64, i64)>,
+}
+
+fn resolve_inspect_target(args: &InspectArgs) -> Result<InspectTarget> {
+    let (session, tool_use_id) = if let Some(run) = &args.run {
+        let (session, tool_use_id) = analytics::parse_run_id(run).ok_or_else(|| {
+            anyhow::anyhow!("invalid --run id (expected <session_id>:<tool_use_id>): {run}")
+        })?;
+        (session.to_string(), Some(tool_use_id.to_string()))
+    } else {
+        let session = args
+            .session
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("inspect requires --session or --run"))?;
+        (session, args.tool_use_id.clone())
+    };
+    Ok(InspectTarget {
+        session,
+        tool_use_id,
+        ordinals: parse_ordinals(args.ordinals.as_deref())?,
+    })
+}
+
+fn parse_ordinals(raw: Option<&str>) -> Result<Option<(i64, i64)>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let (min, max) = raw.split_once(':').ok_or_else(|| {
+        anyhow::anyhow!("invalid --ordinals window (expected <min>:<max>): {raw}")
+    })?;
+    let min = min
+        .parse::<i64>()
+        .with_context(|| format!("invalid --ordinals min: {min}"))?;
+    let max = max
+        .parse::<i64>()
+        .with_context(|| format!("invalid --ordinals max: {max}"))?;
+    if min > max {
+        anyhow::bail!("invalid --ordinals window: min {min} is greater than max {max}");
+    }
+    Ok(Some((min, max)))
 }
 
 #[derive(Debug, Serialize)]
@@ -680,7 +920,9 @@ fn aggregate(args: AggregateArgs, db_path: PathBuf) -> Result<()> {
         ..analytics::RunFilters::default()
     };
     let result = analytics::aggregate(&conn, &filters, &args.group_by)?;
-    output(&result, args.format, || print_aggregate(&result))
+    output_projected(&result, args.format, &args.fields, || {
+        print_aggregate(&result)
+    })
 }
 
 fn audit(args: AuditArgs, db_path: PathBuf) -> Result<()> {
@@ -776,7 +1018,7 @@ fn errors(args: ErrorsArgs, db_path: PathBuf) -> Result<()> {
         ..analytics::RunFilters::default()
     };
     let result = analytics::error_analysis(&conn, &filters, args.top, args.classify)?;
-    output(&result, args.format, || {
+    output_projected(&result, args.format, &args.fields, || {
         print_errors(&result, args.classify)
     })
 }
@@ -815,6 +1057,28 @@ fn sequences(args: SequencesArgs, db_path: PathBuf) -> Result<()> {
         args.recovery,
     )?;
     output(&result, args.format, || print_sequences(&result))
+}
+
+fn profile(args: ProfileArgs, db_path: PathBuf) -> Result<()> {
+    let conn = db::open(&db_path)?;
+    let sessions = scope_sessions(db::list_sessions(&conn)?, &args);
+    let mut usage = Vec::with_capacity(sessions.len());
+    for session in &sessions {
+        usage.push((
+            session.clone(),
+            analytics::usage_messages(&conn, &session.id)?,
+        ));
+    }
+    let envelope = build_profile_envelope(
+        &sessions,
+        db::list_runs(&conn)?,
+        usage,
+        &profile_filters(&args),
+        args.top,
+    );
+    output_projected(&envelope, args.format, &args.fields, || {
+        print_profile(&envelope)
+    })
 }
 
 fn run_projects(command: ProjectsCommand, config_path: PathBuf, mut config: Config) -> Result<()> {
@@ -1179,8 +1443,8 @@ fn find_configured_session(config: &Config, session: &str) -> Option<PathBuf> {
 fn search(args: SearchArgs, db_path: PathBuf) -> Result<()> {
     let conn = db::open(&db_path)?;
     if let Some(content) = &args.content_contains {
-        let hits = analytics::search_content(&conn, content, args.limit)?;
-        return output(&hits, args.format, || {
+        let hits = analytics::search_content(&conn, content, args.limit, args.exact)?;
+        return output_projected(&hits, args.format, &args.fields, || {
             if hits.is_empty() {
                 println!("No results found.");
             } else {
@@ -1218,9 +1482,11 @@ fn search(args: SearchArgs, db_path: PathBuf) -> Result<()> {
 
     if args.group_by_session {
         let groups = group_runs_by_session(&runs);
-        output(&groups, args.format, || print_session_groups(&groups))
+        output_projected(&groups, args.format, &args.fields, || {
+            print_session_groups(&groups)
+        })
     } else {
-        output(&runs, args.format, || print_runs(&runs))
+        output_projected(&runs, args.format, &args.fields, || print_runs(&runs))
     }
 }
 
@@ -1252,6 +1518,8 @@ fn run_scan(command: ScanCommand, config: &Config, cancel: &AtomicBool) -> Resul
         ScanSubcommand::Errors(args) => scan_errors(args, &targets, config, cancel),
         ScanSubcommand::Health(args) => scan_health(args, &targets, config, cancel),
         ScanSubcommand::Sequences(args) => scan_sequences(args, &targets, config, cancel),
+        ScanSubcommand::Profile(args) => scan_profile(args, &targets, config, cancel),
+        ScanSubcommand::Sample(args) => scan_sample(args, &targets, config, cancel),
         ScanSubcommand::ReadScores(args) => scan_read_scores(args, &targets, config, cancel),
         ScanSubcommand::Relations(args) => scan_relations(args, &targets, config, cancel),
     }
@@ -1278,8 +1546,8 @@ fn scan_search(
     let store = load_scan_store(targets, config, cancel)?;
 
     if let Some(content) = args.content_contains.as_deref() {
-        let hits = analytics::search_content_in(&store.messages, content, args.limit);
-        return output(&hits, args.format, || {
+        let hits = analytics::search_content_in(&store.messages, content, args.limit, args.exact);
+        return output_projected(&hits, args.format, &args.fields, || {
             if hits.is_empty() {
                 println!("No results found.");
             } else {
@@ -1325,9 +1593,11 @@ fn scan_search(
 
     if args.group_by_session {
         let groups = group_runs_by_session(&runs);
-        output(&groups, args.format, || print_session_groups(&groups))
+        output_projected(&groups, args.format, &args.fields, || {
+            print_session_groups(&groups)
+        })
     } else {
-        output(&runs, args.format, || print_runs(&runs))
+        output_projected(&runs, args.format, &args.fields, || print_runs(&runs))
     }
 }
 
@@ -1338,25 +1608,29 @@ fn scan_inspect(
     cancel: &AtomicBool,
 ) -> Result<()> {
     let store = load_scan_store(targets, config, cancel)?;
+    let target = resolve_inspect_target(&args)?;
     let session = store
-        .find_session(&args.session)
+        .find_session(&target.session)
         .cloned()
-        .ok_or_else(|| anyhow::anyhow!("Session not found: {}", args.session))?;
+        .ok_or_else(|| anyhow::anyhow!("Session not found: {}", target.session))?;
     let runs = analytics::inspect_runs_in(
         &session,
         store.runs.clone(),
-        args.tool_use_id.as_deref(),
+        target.tool_use_id.as_deref(),
         args.status.as_deref(),
         args.context,
+        target.ordinals,
     );
     if args.with_messages {
         let context = analytics::message_context_in(&store.messages, &runs);
         let payload = InspectWithMessages { runs, context };
-        output(&payload, args.format, || {
+        output_projected(&payload, args.format, &args.fields, || {
             print_inspect_with_messages(&payload)
         })
     } else {
-        output(&runs, args.format, || print_inspect_runs(&runs))
+        output_projected(&runs, args.format, &args.fields, || {
+            print_inspect_runs(&runs)
+        })
     }
 }
 
@@ -1401,7 +1675,9 @@ fn scan_aggregate(
         ..analytics::RunFilters::default()
     };
     let result = analytics::aggregate_in(store.runs, &filters, &args.group_by);
-    output(&result, args.format, || print_aggregate(&result))
+    output_projected(&result, args.format, &args.fields, || {
+        print_aggregate(&result)
+    })
 }
 
 fn scan_audit(args: ScanAuditArgs, targets: &[PathBuf]) -> Result<()> {
@@ -1427,7 +1703,7 @@ fn scan_errors(
         ..analytics::RunFilters::default()
     };
     let result = analytics::error_analysis_in(store.runs, &filters, args.top, args.classify);
-    output(&result, args.format, || {
+    output_projected(&result, args.format, &args.fields, || {
         print_errors(&result, args.classify)
     })
 }
@@ -1484,6 +1760,56 @@ fn scan_sequences(
         args.recovery,
     );
     output(&result, args.format, || print_sequences(&result))
+}
+
+fn scan_profile(
+    args: ProfileArgs,
+    targets: &[PathBuf],
+    config: &Config,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let store = load_scan_store(targets, config, cancel)?;
+    let sessions = scope_sessions(store.sessions, &args);
+    // Mirror the DB path: every scoped session contributes a (possibly empty)
+    // usage slice so health totals match.
+    let usage = sessions
+        .iter()
+        .map(|session| {
+            let messages = store
+                .usage_by_session
+                .iter()
+                .find(|(record, _)| record.id == session.id)
+                .map_or_else(Vec::new, |(_, messages)| messages.clone());
+            (session.clone(), messages)
+        })
+        .collect::<Vec<_>>();
+    let envelope = build_profile_envelope(
+        &sessions,
+        store.runs,
+        usage,
+        &profile_filters(&args),
+        args.top,
+    );
+    output_projected(&envelope, args.format, &args.fields, || {
+        print_profile(&envelope)
+    })
+}
+
+fn scan_sample(
+    args: SampleArgs,
+    targets: &[PathBuf],
+    config: &Config,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let store = load_scan_store(targets, config, cancel)?;
+    let result = analytics::sample_runs_in(
+        store.runs,
+        &sample_filters(&args),
+        args.stratify_by,
+        args.count,
+        args.seed,
+    );
+    output_projected(&result, args.format, &args.fields, || print_sample(&result))
 }
 
 fn scan_read_scores(
@@ -1672,9 +1998,478 @@ fn print_scan_audit_reports(reports: &[scan::AuditFileReport]) {
     }
 }
 
+fn sample(args: SampleArgs, db_path: PathBuf) -> Result<()> {
+    let conn = db::open(&db_path)?;
+    let result = analytics::sample_runs(
+        &conn,
+        &sample_filters(&args),
+        args.stratify_by,
+        args.count,
+        args.seed,
+    )?;
+    output_projected(&result, args.format, &args.fields, || print_sample(&result))
+}
+
+fn sample_filters(args: &SampleArgs) -> analytics::RunFilters {
+    analytics::RunFilters {
+        project: args.project.clone(),
+        session: args.session.clone(),
+        since: args.since.clone(),
+        tool: args.tool.clone(),
+        status: args.status.clone(),
+        ..analytics::RunFilters::default()
+    }
+}
+
+/// One similar run: the full run shape plus its similarity to the exemplar.
+#[derive(Debug, Serialize)]
+struct SimilarRun {
+    #[serde(flatten)]
+    run: db::ToolCallRun,
+    similarity: f64,
+}
+
+fn similar(args: SimilarArgs, db_path: PathBuf) -> Result<()> {
+    let conn = db::open(&db_path)?;
+    let (session_id, tool_use_id) = analytics::parse_run_id(&args.to_run).ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid --to-run id (expected <session_id>:<tool_use_id>): {}",
+            args.to_run
+        )
+    })?;
+    let all_runs = db::list_runs(&conn)?;
+    let target = all_runs
+        .iter()
+        .find(|run| run.session_id == session_id && run.tool_use_id == tool_use_id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("run not found: {}", args.to_run))?;
+
+    let files = crate::embed::require_model(args.model_dir)?;
+    let embedder = crate::embed::Embedder::load(&files)?;
+    let filters = analytics::RunFilters {
+        project: args.project,
+        session: args.session,
+        since: args.since,
+        tool: args.tool,
+        status: args.status,
+        ..analytics::RunFilters::default()
+    };
+    let population = analytics::filter_runs(all_runs, &filters);
+
+    let target_embedding = crate::embed::embedding_for(&conn, &embedder, &target)?;
+    let mut scored = Vec::new();
+    for run in &population {
+        if run.session_id == target.session_id && run.tool_use_id == target.tool_use_id {
+            continue;
+        }
+        let embedding = crate::embed::embedding_for(&conn, &embedder, run)?;
+        scored.push(SimilarRun {
+            run: run.clone(),
+            similarity: analytics::round_score(crate::embed::cosine(&target_embedding, &embedding)),
+        });
+    }
+    scored.sort_by(|left, right| {
+        right
+            .similarity
+            .partial_cmp(&left.similarity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.run.session_id.cmp(&right.run.session_id))
+            .then_with(|| left.run.tool_use_id.cmp(&right.run.tool_use_id))
+    });
+    scored.truncate(args.count);
+    output_projected(&scored, args.format, &args.fields, || {
+        print_similar(&scored)
+    })
+}
+
+fn print_similar(runs: &[SimilarRun]) {
+    if runs.is_empty() {
+        println!("No similar runs found.");
+        return;
+    }
+    println!("similarity | tool_name | run_id | command");
+    println!("------------------------------------------");
+    for similar in runs {
+        println!(
+            "{:.6} | {} | {} | {}",
+            similar.similarity,
+            similar.run.tool_name,
+            analytics::run_id(&similar.run.session_id, &similar.run.tool_use_id),
+            similar.run.command.as_deref().unwrap_or(""),
+        );
+    }
+}
+
+fn print_sample(result: &analytics::SampleResult) {
+    println!(
+        "Sample ({} of {} runs, stratified by {}, seed {}):",
+        result.runs.len(),
+        result.population,
+        result.stratify_by,
+        result.seed,
+    );
+    for stratum in &result.strata {
+        println!(
+            "  {}: {} of {} sampled",
+            stratum.key, stratum.sampled, stratum.population
+        );
+    }
+    println!();
+    print_runs(&result.runs);
+}
+
+fn profile_filters(args: &ProfileArgs) -> analytics::RunFilters {
+    analytics::RunFilters {
+        project: args.project.clone(),
+        session: args.session.clone(),
+        since: args.since.clone(),
+        ..analytics::RunFilters::default()
+    }
+}
+
+/// Scope sessions for the profile overview/health inputs, mirroring the
+/// `RunFilters` session semantics (internal id, external id, or parent).
+fn scope_sessions(sessions: Vec<db::SessionRecord>, args: &ProfileArgs) -> Vec<db::SessionRecord> {
+    sessions
+        .into_iter()
+        .filter(|session| {
+            args.project
+                .as_ref()
+                .map_or(true, |project| &session.project_alias == project)
+        })
+        .filter(|session| {
+            args.since.as_ref().map_or(true, |since| {
+                session.started_at.as_deref().unwrap_or("") >= since.as_str()
+            })
+        })
+        .filter(|session| {
+            args.session.as_ref().map_or(true, |value| {
+                &session.id == value
+                    || &session.external_session_id == value
+                    || session.parent_session_id.as_ref() == Some(value)
+            })
+        })
+        .collect()
+}
+
+/// Assemble the profile envelope from existing analytics primitives.
+///
+/// Twin of [`build_relations_envelope`]: a pure function over store-agnostic
+/// inputs so the `transcripts` and `scan` backends emit byte-identical JSON.
+/// Lists that could grow unboundedly (error patterns, slowest runs, flagged
+/// sessions, error hotspots) are capped at `top`.
+fn build_profile_envelope(
+    sessions: &[db::SessionRecord],
+    runs: Vec<db::ToolCallRun>,
+    usage: Vec<(db::SessionRecord, Vec<analytics::UsageMessage>)>,
+    filters: &analytics::RunFilters,
+    top: usize,
+) -> Value {
+    let aggregate = analytics::aggregate_in(runs.clone(), filters, &[GroupKey::ToolName]);
+    let errors = analytics::error_analysis_in(runs.clone(), filters, top, true);
+    let sequences = analytics::sequence_analysis_in(runs.clone(), filters, 2, 2, 1, true);
+    let health = analytics::health_project_in(usage, None, None, usize::MAX);
+    let filtered = analytics::filter_runs(runs, filters);
+
+    let overview = json!({
+        "session_count": sessions.len(),
+        "run_count": filtered.len(),
+        "message_count": sessions.iter().map(|session| session.message_count).sum::<i64>(),
+        "projects": sessions
+            .iter()
+            .map(|session| session.project_alias.clone())
+            .collect::<BTreeSet<_>>(),
+        "first_started_at": sessions
+            .iter()
+            .filter_map(|session| session.started_at.clone())
+            .min(),
+        "last_ended_at": sessions
+            .iter()
+            .filter_map(|session| session.ended_at.clone())
+            .max(),
+    });
+
+    let tools = aggregate
+        .groups
+        .iter()
+        .map(|group| {
+            json!({
+                "tool_name": group.key.get("tool_name").cloned().unwrap_or_default(),
+                "count": group.count,
+                "errors": group.errors,
+                "error_pct": group.error_pct,
+                "avg_duration_ms": group.avg_duration_ms,
+                "p95_duration_ms": group.p95_duration_ms,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let errors_section = profile_errors_section(&errors);
+    let recovery = json!(sequences.recovery_stats.clone().unwrap_or_default());
+    let token_health = profile_token_health_section(&health, top);
+    let outliers = profile_outliers_section(&filtered, &sequences, top);
+
+    let mut envelope = serde_json::Map::new();
+    envelope.insert("overview".to_string(), overview);
+    envelope.insert("tools".to_string(), Value::Array(tools));
+    envelope.insert("errors".to_string(), errors_section);
+    envelope.insert("recovery".to_string(), recovery);
+    envelope.insert("token_health".to_string(), token_health);
+    envelope.insert("outliers".to_string(), outliers);
+    Value::Object(envelope)
+}
+
+fn profile_errors_section(errors: &analytics::ErrorAnalysisResult) -> Value {
+    let mut category_counts = BTreeMap::<(String, String), usize>::new();
+    for pattern in &errors.patterns {
+        *category_counts
+            .entry((
+                pattern
+                    .category
+                    .clone()
+                    .unwrap_or_else(|| "uncategorized".to_string()),
+                pattern
+                    .preventability
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string()),
+            ))
+            .or_default() += pattern.count;
+    }
+    json!({
+        "total_errors": errors.total_errors,
+        "categories": category_counts
+            .into_iter()
+            .map(|((category, preventability), count)| json!({
+                "category": category,
+                "preventability": preventability,
+                "count": count,
+            }))
+            .collect::<Vec<_>>(),
+        "top_patterns": errors
+            .patterns
+            .iter()
+            .map(|pattern| json!({
+                "fingerprint": pattern.fingerprint,
+                "tool_name": pattern.tool_name,
+                "count": pattern.count,
+                "category": pattern.category,
+                "preventability": pattern.preventability,
+                "sample_runs": pattern.sample_runs,
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn profile_token_health_section(health: &analytics::ProjectHealth, top: usize) -> Value {
+    let mut flagged = health
+        .sessions
+        .iter()
+        .filter(|row| row.cache_misses > 0 || row.jumps > 0)
+        .map(|row| {
+            json!({
+                "session_id": row.session_id,
+                "cache_misses": row.cache_misses,
+                "jumps": row.jumps,
+            })
+        })
+        .collect::<Vec<_>>();
+    flagged.sort_by(|left, right| {
+        let flagged_count = |value: &Value| {
+            value["cache_misses"].as_i64().unwrap_or(0) + value["jumps"].as_i64().unwrap_or(0)
+        };
+        flagged_count(right)
+            .cmp(&flagged_count(left))
+            .then_with(|| {
+                left["session_id"]
+                    .as_str()
+                    .cmp(&right["session_id"].as_str())
+            })
+    });
+    flagged.truncate(top);
+    json!({
+        "session_count": health.session_count,
+        "total_cache_misses": health.total_cache_misses,
+        "total_jumps": health.total_jumps,
+        "total_waste_tokens": health.total_waste_tokens,
+        "peak_context": health.peak_context,
+        "flagged_sessions": flagged,
+    })
+}
+
+fn profile_outliers_section(
+    filtered: &[db::ToolCallRun],
+    sequences: &analytics::SequenceResult,
+    top: usize,
+) -> Value {
+    let mut durations = filtered
+        .iter()
+        .filter_map(|run| run.duration_ms)
+        .collect::<Vec<_>>();
+    durations.sort_unstable();
+    let mut timed = filtered
+        .iter()
+        .filter(|run| run.duration_ms.is_some())
+        .collect::<Vec<_>>();
+    timed.sort_by(|left, right| {
+        right
+            .duration_ms
+            .cmp(&left.duration_ms)
+            .then_with(|| left.session_id.cmp(&right.session_id))
+            .then_with(|| left.tool_use_id.cmp(&right.tool_use_id))
+    });
+    let slowest = timed
+        .iter()
+        .take(top)
+        .map(|run| {
+            json!({
+                "run_id": analytics::run_id(&run.session_id, &run.tool_use_id),
+                "tool_name": run.tool_name,
+                "duration_ms": run.duration_ms,
+            })
+        })
+        .collect::<Vec<_>>();
+    let most_retried = sequences.retry_patterns.first().map_or(Value::Null, |row| {
+        json!({
+            "pattern": row.pattern,
+            "count": row.count,
+        })
+    });
+    let mut density = BTreeMap::<String, (usize, usize)>::new();
+    for run in filtered {
+        let entry = density.entry(run.session_id.clone()).or_default();
+        entry.1 += 1;
+        if run.status == "error" {
+            entry.0 += 1;
+        }
+    }
+    let mut hotspots = density
+        .into_iter()
+        .filter(|(_, (error_count, _))| *error_count > 0)
+        .map(|(session_id, (error_count, run_count))| {
+            json!({
+                "session_id": session_id,
+                "errors": error_count,
+                "runs": run_count,
+                "error_pct": (error_count as f64 / run_count as f64 * 1000.0).round() / 10.0,
+            })
+        })
+        .collect::<Vec<_>>();
+    hotspots.sort_by(|left, right| {
+        right["error_pct"]
+            .as_f64()
+            .partial_cmp(&left["error_pct"].as_f64())
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| right["errors"].as_u64().cmp(&left["errors"].as_u64()))
+            .then_with(|| {
+                left["session_id"]
+                    .as_str()
+                    .cmp(&right["session_id"].as_str())
+            })
+    });
+    hotspots.truncate(top);
+    json!({
+        "duration_p95_ms": analytics::percentile(&durations, 95),
+        "slowest_runs": slowest,
+        "most_retried": most_retried,
+        "error_hotspots": hotspots,
+    })
+}
+
+fn print_profile(envelope: &Value) {
+    let overview = &envelope["overview"];
+    println!(
+        "Profile: {} sessions, {} runs, {} messages",
+        overview["session_count"].as_u64().unwrap_or(0),
+        overview["run_count"].as_u64().unwrap_or(0),
+        overview["message_count"].as_i64().unwrap_or(0),
+    );
+    let projects = overview["projects"]
+        .as_array()
+        .map(|projects| {
+            projects
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    println!("  Projects: {projects}");
+
+    println!("\nTools:");
+    for tool in envelope["tools"].as_array().into_iter().flatten() {
+        println!(
+            "  {:<12} calls={} errors={} p95={}",
+            tool["tool_name"].as_str().unwrap_or("?"),
+            tool["count"].as_u64().unwrap_or(0),
+            tool["errors"].as_u64().unwrap_or(0),
+            tool["p95_duration_ms"]
+                .as_i64()
+                .map_or_else(|| "?ms".to_string(), |value| format!("{value}ms")),
+        );
+    }
+
+    let errors = &envelope["errors"];
+    println!(
+        "\nErrors ({} total):",
+        errors["total_errors"].as_u64().unwrap_or(0)
+    );
+    for pattern in errors["top_patterns"].as_array().into_iter().flatten() {
+        println!(
+            "  [{}] {} x{}",
+            pattern["category"].as_str().unwrap_or("?"),
+            pattern["fingerprint"].as_str().unwrap_or(""),
+            pattern["count"].as_u64().unwrap_or(0),
+        );
+    }
+
+    println!("\nRecovery:");
+    for row in envelope["recovery"].as_array().into_iter().flatten() {
+        println!(
+            "  {}: retry={}% recover={}%",
+            row["category"].as_str().unwrap_or("?"),
+            row["retry_rate"],
+            row["recovery_rate"],
+        );
+    }
+
+    let token_health = &envelope["token_health"];
+    println!(
+        "\nToken health: {} cache misses, {} jumps, {} waste tokens",
+        token_health["total_cache_misses"].as_u64().unwrap_or(0),
+        token_health["total_jumps"].as_u64().unwrap_or(0),
+        token_health["total_waste_tokens"].as_i64().unwrap_or(0),
+    );
+
+    println!("\nOutliers:");
+    let outliers = &envelope["outliers"];
+    for run in outliers["slowest_runs"].as_array().into_iter().flatten() {
+        println!(
+            "  {}ms {} ({})",
+            run["duration_ms"].as_i64().unwrap_or(0),
+            run["tool_name"].as_str().unwrap_or("?"),
+            run["run_id"].as_str().unwrap_or(""),
+        );
+    }
+    if let Some(retried) = outliers["most_retried"].as_object() {
+        println!(
+            "  most retried: {} x{}",
+            retried["pattern"].as_str().unwrap_or(""),
+            retried["count"],
+        );
+    }
+    for hotspot in outliers["error_hotspots"].as_array().into_iter().flatten() {
+        println!(
+            "  hotspot: {} ({}/{} runs errored)",
+            hotspot["session_id"].as_str().unwrap_or("?"),
+            hotspot["errors"].as_u64().unwrap_or(0),
+            hotspot["runs"].as_u64().unwrap_or(0),
+        );
+    }
+}
+
 fn print_scan_index() {
     println!(
-        "Spotter Scan (DB-less) CLI\n\nCommands:\n\n  spotter scan search      Search tool call runs and transcript content\n  spotter scan inspect     Inspect tool call runs for a specific session\n  spotter scan compare     Compare tool runs between session cohorts\n  spotter scan aggregate   Aggregate tool usage across sessions\n  spotter scan audit       Audit transcript JSONL completeness\n  spotter scan errors      Analyze tool call errors\n  spotter scan health      Analyze transcript token health\n  spotter scan sequences   Find tool call patterns and retries\n  spotter scan read-scores Score how often files are opened via Read\n  spotter scan relations   Mine cross-file usage relations from transcripts\n\nScan-level options (apply to every subcommand):\n  --file <path>      Scan a specific JSONL transcript (repeatable)\n  --root <path>      Scan every JSONL under a transcript root (repeatable)\n  --no-subagents     Skip subagent transcripts when walking roots"
+        "Spotter Scan (DB-less) CLI\n\nCommands:\n\n  spotter scan search      Search tool call runs and transcript content\n  spotter scan inspect     Inspect tool call runs for a specific session\n  spotter scan compare     Compare tool runs between session cohorts\n  spotter scan aggregate   Aggregate tool usage across sessions\n  spotter scan audit       Audit transcript JSONL completeness\n  spotter scan errors      Analyze tool call errors\n  spotter scan health      Analyze transcript token health\n  spotter scan sequences   Find tool call patterns and retries\n  spotter scan profile     One-call dimensional overview of a scope\n  spotter scan sample      Draw a stratified, seeded sample of tool-call runs\n  spotter scan read-scores Score how often files are opened via Read\n  spotter scan relations   Mine cross-file usage relations from transcripts\n\nScan-level options (apply to every subcommand):\n  --file <path>      Scan a specific JSONL transcript (repeatable)\n  --root <path>      Scan every JSONL under a transcript root (repeatable)\n  --no-subagents     Skip subagent transcripts when walking roots"
     );
 }
 
@@ -1728,12 +2523,115 @@ where
     T: Serialize,
     F: FnOnce(),
 {
+    output_projected(value, format, &[], print_table)
+}
+
+/// Single JSON emission seam for every query verb.
+///
+/// JSON output is decorated with stable run ids (any object carrying both
+/// `session_id` and `tool_use_id` gains a `run_id`) before an optional
+/// `--fields` projection trims objects to the requested top-level keys. Table
+/// output ignores `fields` entirely.
+fn output_projected<T, F>(
+    value: &T,
+    format: OutputFormat,
+    fields: &[String],
+    print_table: F,
+) -> Result<()>
+where
+    T: Serialize,
+    F: FnOnce(),
+{
     if format == OutputFormat::Json {
-        println!("{}", serde_json::to_string_pretty(value)?);
+        let mut json = serde_json::to_value(value)?;
+        decorate_run_ids(&mut json);
+        if !fields.is_empty() {
+            json = project_fields(json, fields)?;
+        }
+        println!("{}", serde_json::to_string_pretty(&json)?);
     } else {
         print_table();
     }
     Ok(())
+}
+
+fn decorate_run_ids(value: &mut Value) {
+    match value {
+        Value::Array(items) => items.iter_mut().for_each(decorate_run_ids),
+        Value::Object(map) => {
+            let run_id = match (map.get("session_id"), map.get("tool_use_id")) {
+                (Some(Value::String(session_id)), Some(Value::String(tool_use_id)))
+                    if !map.contains_key("run_id") =>
+                {
+                    Some(analytics::run_id(session_id, tool_use_id))
+                }
+                _ => None,
+            };
+            if let Some(run_id) = run_id {
+                map.insert("run_id".to_string(), Value::String(run_id));
+            }
+            map.values_mut().for_each(decorate_run_ids);
+        }
+        _ => {}
+    }
+}
+
+/// Filter output objects to the requested top-level keys: each element of a
+/// top-level array, or the top-level object itself. Unknown keys are a loud
+/// error so agents notice typos instead of silently getting empty objects.
+fn project_fields(value: Value, fields: &[String]) -> Result<Value> {
+    match value {
+        Value::Array(items) => {
+            if let Some(first) = items.iter().find_map(Value::as_object) {
+                check_fields(first.keys(), fields)?;
+            }
+            Ok(Value::Array(
+                items
+                    .into_iter()
+                    .map(|item| match item {
+                        Value::Object(map) => Value::Object(retain_fields(map, fields)),
+                        other => other,
+                    })
+                    .collect(),
+            ))
+        }
+        Value::Object(map) => {
+            check_fields(map.keys(), fields)?;
+            Ok(Value::Object(retain_fields(map, fields)))
+        }
+        other => anyhow::bail!(
+            "--fields requires object or array JSON output, got {}",
+            match other {
+                Value::Null => "null",
+                Value::Bool(_) => "a boolean",
+                Value::Number(_) => "a number",
+                Value::String(_) => "a string",
+                Value::Array(_) | Value::Object(_) => unreachable!(),
+            }
+        ),
+    }
+}
+
+fn check_fields<'a>(available: impl Iterator<Item = &'a String>, fields: &[String]) -> Result<()> {
+    let available = available.map(String::as_str).collect::<Vec<_>>();
+    for field in fields {
+        if !available.contains(&field.as_str()) {
+            anyhow::bail!(
+                "unknown field '{field}'; available top-level fields: {}",
+                available.join(", ")
+            );
+        }
+    }
+    Ok(())
+}
+
+fn retain_fields(
+    map: serde_json::Map<String, Value>,
+    fields: &[String],
+) -> serde_json::Map<String, Value> {
+    map.into_iter()
+        .filter(|(key, _)| fields.contains(key))
+        .collect()
 }
 
 fn print_runs(runs: &[db::ToolCallRun]) {
@@ -2061,7 +2959,7 @@ fn discover_project_cwds(root: &Path) -> Vec<PathBuf> {
 
 fn print_transcripts_index() {
     println!(
-        "Spotter Transcript Analytics CLI\n\nCommands:\n\n  spotter transcripts sync       Import/re-import transcripts and derive tool call runs\n  spotter transcripts search     Search tool call runs across sessions with filters\n  spotter transcripts inspect    Inspect tool call runs for a specific session\n  spotter transcripts compare    Compare tool runs between two session cohorts\n  spotter transcripts aggregate  Aggregate tool usage across sessions\n  spotter transcripts audit      Audit transcript import completeness\n  spotter transcripts errors     Analyze tool call errors\n  spotter transcripts health     Analyze transcript token health\n  spotter transcripts sequences  Find tool call patterns and retries"
+        "Spotter Transcript Analytics CLI\n\nCommands:\n\n  spotter transcripts sync       Import/re-import transcripts and derive tool call runs\n  spotter transcripts search     Search tool call runs across sessions with filters\n  spotter transcripts inspect    Inspect tool call runs for a specific session\n  spotter transcripts compare    Compare tool runs between two session cohorts\n  spotter transcripts aggregate  Aggregate tool usage across sessions\n  spotter transcripts audit      Audit transcript import completeness\n  spotter transcripts errors     Analyze tool call errors\n  spotter transcripts health     Analyze transcript token health\n  spotter transcripts sequences  Find tool call patterns and retries\n  spotter transcripts profile    One-call dimensional overview of a scope\n  spotter transcripts sample     Draw a stratified, seeded sample of tool-call runs\n  spotter transcripts similar    Find runs similar to an exemplar run via local embeddings"
     );
 }
 

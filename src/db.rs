@@ -182,7 +182,7 @@ pub fn canonical_content_hash(conn: &Connection) -> Result<String> {
     for query in [
         "SELECT alias, path FROM projects ORDER BY alias",
         "SELECT id, external_session_id, parent_session_id, is_subagent, agent_id, project_alias, transcript_path, cwd, slug, git_branch, version, started_at, ended_at, message_count FROM sessions ORDER BY id",
-        "SELECT session_id, ordinal, uuid, parent_uuid, message_id, record_type, role, content, search_text, raw_payload, timestamp, is_sidechain, agent_id, tool_use_id, parent_tool_use_id, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, model FROM messages ORDER BY session_id, ordinal",
+        "SELECT session_id, ordinal, uuid, parent_uuid, message_id, record_type, role, content, search_text, raw_payload, timestamp, is_sidechain, agent_id, tool_use_id, parent_tool_use_id, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, model, effort FROM messages ORDER BY session_id, ordinal",
         "SELECT tool_use_id, session_id, external_session_id, parent_session_id, is_subagent, agent_id, tool_name, command, command_program, command_args, command_fingerprint, input_summary, input_size, output_size, file_paths, status, started_at, finished_at, duration_ms, start_ordinal, end_ordinal, source_scope, error_content, project_alias, worktree_name, canonical_cwd, read_total_lines, read_lines, read_truncated FROM tool_call_runs ORDER BY session_id, tool_use_id",
     ] {
         let mut stmt = conn.prepare(query)?;
@@ -443,32 +443,42 @@ pub fn find_session(conn: &Connection, id: &str) -> Result<Option<SessionRecord>
 }
 
 /// Search message content.
-pub fn search_messages(conn: &Connection, needle: &str, limit: usize) -> Result<Vec<MessageHit>> {
-    if needle.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-
+/// Search message content chunks, ranked by FTS5 `bm25()`.
+///
+/// `query` is a fully-built FTS5 MATCH expression (see [`fts_terms_query`] and
+/// [`fts_phrase_query`]); raw user text never reaches this function. Rows are
+/// chunk-level: long messages are split at indexing time, so results resolve
+/// back to their parent message via `ordinal`.
+pub fn search_message_chunks(
+    conn: &Connection,
+    query: &str,
+    row_cap: usize,
+) -> Result<Vec<crate::analytics::RankedChunk>> {
     ensure_messages_fts_current(conn)?;
-    let query = fts_phrase_query(needle);
     let mut stmt = conn.prepare(
-        "SELECT messages.session_id, sessions.external_session_id, sessions.project_alias, messages.ordinal, messages.record_type, messages.role, messages.timestamp, messages.content \
+        "SELECT messages_fts.session_id, messages_fts.ordinal, messages_fts.chunk_index, \
+         messages_fts.content, bm25(messages_fts) AS rank, \
+         sessions.external_session_id, sessions.project_alias, \
+         messages.record_type, messages.role, messages.timestamp \
          FROM messages_fts \
          JOIN messages ON messages.session_id = messages_fts.session_id AND messages.ordinal = CAST(messages_fts.ordinal AS INTEGER) \
          JOIN sessions ON sessions.id = messages.session_id \
          WHERE messages_fts MATCH ?1 \
-         ORDER BY messages.timestamp, messages.ordinal LIMIT ?2",
+         ORDER BY rank, messages_fts.session_id, messages_fts.ordinal, messages_fts.chunk_index \
+         LIMIT ?2",
     )?;
-    let rows = stmt.query_map(params![query, limit as i64], |row| {
-        let content: String = row.get(7)?;
-        Ok(MessageHit {
+    let rows = stmt.query_map(params![query, row_cap as i64], |row| {
+        Ok(crate::analytics::RankedChunk {
             session_id: row.get(0)?,
-            external_session_id: row.get(1)?,
-            project_alias: row.get(2)?,
-            ordinal: row.get(3)?,
-            record_type: row.get(4)?,
-            role: row.get(5)?,
-            timestamp: row.get(6)?,
-            snippet: truncate_chars(&plain_text(&content), 180),
+            ordinal: row.get(1)?,
+            chunk_index: row.get(2)?,
+            content: row.get(3)?,
+            rank: row.get(4)?,
+            external_session_id: row.get(5)?,
+            project_alias: row.get(6)?,
+            record_type: row.get(7)?,
+            role: row.get(8)?,
+            timestamp: row.get(9)?,
         })
     })?;
     collect_rows(rows)
@@ -508,6 +518,71 @@ pub fn count_jsonl_lines(path: &Path) -> Result<i64> {
     let text = fs::read_to_string(path)
         .with_context(|| format!("failed to read transcript {}", path.display()))?;
     Ok(text.lines().filter(|line| !line.trim().is_empty()).count() as i64)
+}
+
+/// Create the derived embeddings cache table on demand.
+///
+/// Like `messages_fts`, this is rebuildable derived data (embeddings can
+/// always be recomputed from runs), so it is created lazily rather than via a
+/// versioned migration, and never appears in the checked-in schema snapshot.
+fn ensure_run_embeddings_table(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS run_embeddings (
+            session_id TEXT NOT NULL,
+            tool_use_id TEXT NOT NULL,
+            model TEXT NOT NULL,
+            embedding BLOB NOT NULL,
+            PRIMARY KEY (session_id, tool_use_id, model)
+        );
+        ",
+    )?;
+    Ok(())
+}
+
+/// Load a cached embedding for a run, if present.
+pub fn get_embedding(
+    conn: &Connection,
+    session_id: &str,
+    tool_use_id: &str,
+    model: &str,
+) -> Result<Option<Vec<f32>>> {
+    ensure_run_embeddings_table(conn)?;
+    let blob = conn
+        .query_row(
+            "SELECT embedding FROM run_embeddings \
+             WHERE session_id = ?1 AND tool_use_id = ?2 AND model = ?3",
+            params![session_id, tool_use_id, model],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()?;
+    Ok(blob.map(|blob| {
+        blob.chunks_exact(4)
+            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect()
+    }))
+}
+
+/// Cache an embedding for a run.
+pub fn upsert_embedding(
+    conn: &Connection,
+    session_id: &str,
+    tool_use_id: &str,
+    model: &str,
+    embedding: &[f32],
+) -> Result<()> {
+    ensure_run_embeddings_table(conn)?;
+    let blob = embedding
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect::<Vec<_>>();
+    conn.execute(
+        "INSERT INTO run_embeddings(session_id, tool_use_id, model, embedding) \
+         VALUES (?1, ?2, ?3, ?4) \
+         ON CONFLICT(session_id, tool_use_id, model) DO UPDATE SET embedding = excluded.embedding",
+        params![session_id, tool_use_id, model, blob],
+    )?;
+    Ok(())
 }
 
 // Mostly one schema DDL string; splitting it across functions would obscure it.
@@ -573,6 +648,7 @@ fn migrate(conn: &Connection, path: &Path) -> Result<()> {
             cache_read_input_tokens INTEGER,
             cache_creation_input_tokens INTEGER,
             model TEXT,
+            effort TEXT,
             PRIMARY KEY(session_id, ordinal),
             FOREIGN KEY(session_id) REFERENCES sessions(id)
         );
@@ -624,6 +700,7 @@ fn migrate(conn: &Connection, path: &Path) -> Result<()> {
         ",
     )?;
     ensure_search_text_column(conn)?;
+    ensure_effort_column(conn)?;
     ensure_tool_call_runs_session_key(conn)?;
     ensure_read_line_columns(conn)?;
     conn.execute_batch("PRAGMA user_version = 5;")?;
@@ -761,11 +838,30 @@ fn snapshot_database(path: &Path, version: i32) -> Result<()> {
 fn rebuild_messages_fts(conn: &Connection) -> Result<()> {
     ensure_messages_fts_table(conn)?;
     conn.execute("DELETE FROM messages_fts", [])?;
-    conn.execute(
-        "INSERT INTO messages_fts(session_id, ordinal, content) \
-         SELECT session_id, ordinal, search_text FROM messages",
-        [],
-    )?;
+    let mut stmt = conn.prepare("SELECT session_id, ordinal, search_text FROM messages")?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let tx = conn.unchecked_transaction()?;
+    for (session_id, ordinal, search_text) in rows {
+        for (index, chunk) in crate::analytics::chunk_search_text(&search_text)
+            .iter()
+            .enumerate()
+        {
+            tx.execute(
+                "INSERT INTO messages_fts(session_id, ordinal, chunk_index, content) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![session_id, ordinal, index as i64, chunk],
+            )?;
+        }
+    }
+    tx.commit()?;
     Ok(())
 }
 
@@ -775,10 +871,27 @@ fn ensure_messages_fts_table(conn: &Connection) -> Result<()> {
         CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
             session_id UNINDEXED,
             ordinal UNINDEXED,
+            chunk_index UNINDEXED,
             content
         );
         ",
     )?;
+    Ok(())
+}
+
+/// Add the `effort` column to `messages` if an older database predates it.
+/// `CREATE TABLE IF NOT EXISTS` never alters an existing table, so migrated
+/// databases need this explicit backfill (same pattern as `search_text`).
+fn ensure_effort_column(conn: &Connection) -> Result<()> {
+    let has_column = conn
+        .prepare("PRAGMA table_info(messages)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .iter()
+        .any(|name| name == "effort");
+    if !has_column {
+        conn.execute("ALTER TABLE messages ADD COLUMN effort TEXT", [])?;
+    }
     Ok(())
 }
 
@@ -799,7 +912,17 @@ fn ensure_search_text_column(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Keep `messages_fts` in sync with `messages`.
+///
+/// `messages_fts` is derived data, so a shape change (the `chunk_index` column
+/// added for BM25 chunking) is handled by dropping and rebuilding it in place
+/// rather than a `user_version` migration: no user data is at risk, hence no
+/// pre-migration snapshot. Staleness is detected by comparing message coverage
+/// (chunks share their parent message's session/ordinal key).
 fn ensure_messages_fts_current(conn: &Connection) -> Result<()> {
+    if messages_fts_exists(conn)? && !messages_fts_has_chunk_index(conn)? {
+        conn.execute("DROP TABLE messages_fts", [])?;
+    }
     if !messages_fts_exists(conn)? {
         rebuild_messages_fts(conn)?;
         return Ok(());
@@ -807,13 +930,25 @@ fn ensure_messages_fts_current(conn: &Connection) -> Result<()> {
     let message_count = conn.query_row("SELECT COUNT(*) FROM messages", [], |row| {
         row.get::<_, i64>(0)
     })?;
-    let fts_count = conn.query_row("SELECT COUNT(*) FROM messages_fts", [], |row| {
-        row.get::<_, i64>(0)
-    })?;
-    if message_count != fts_count {
+    let indexed_count = conn.query_row(
+        "SELECT COUNT(*) FROM (SELECT DISTINCT session_id, ordinal FROM messages_fts)",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    if message_count != indexed_count {
         rebuild_messages_fts(conn)?;
     }
     Ok(())
+}
+
+fn messages_fts_has_chunk_index(conn: &Connection) -> Result<bool> {
+    let has_column = conn
+        .prepare("PRAGMA table_info(messages_fts)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .iter()
+        .any(|name| name == "chunk_index");
+    Ok(has_column)
 }
 
 fn messages_fts_exists(conn: &Connection) -> Result<bool> {
@@ -825,8 +960,22 @@ fn messages_fts_exists(conn: &Connection) -> Result<bool> {
     .map_err(Into::into)
 }
 
-fn fts_phrase_query(needle: &str) -> String {
+/// FTS5 phrase query for `--exact` (the pre-BM25 default semantics): the whole
+/// needle as one quoted phrase, internal quotes doubled.
+pub fn fts_phrase_query(needle: &str) -> String {
     format!("\"{}\"", needle.trim().replace('"', "\"\""))
+}
+
+/// FTS5 AND query for the default ranked match: each pre-tokenized term as a
+/// quoted phrase, space-separated (FTS5 implicit AND). Terms come from
+/// `analytics::tokenize`, so they are alphanumeric-only; quotes are still
+/// doubled defensively. Raw user text is never interpolated.
+pub fn fts_terms_query(terms: &[String]) -> String {
+    terms
+        .iter()
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn insert_message(conn: &Connection, session_id: &str, message: &TranscriptMessage) -> Result<()> {
@@ -834,8 +983,8 @@ fn insert_message(conn: &Connection, session_id: &str, message: &TranscriptMessa
     let search_text = content_text(&message.content);
     let raw_payload = serde_json::to_string(&message.raw_payload)?;
     conn.execute(
-        "INSERT INTO messages(session_id, ordinal, uuid, parent_uuid, message_id, record_type, role, content, search_text, raw_payload, timestamp, is_sidechain, agent_id, tool_use_id, parent_tool_use_id, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, model) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+        "INSERT INTO messages(session_id, ordinal, uuid, parent_uuid, message_id, record_type, role, content, search_text, raw_payload, timestamp, is_sidechain, agent_id, tool_use_id, parent_tool_use_id, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, model, effort) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
         params![
             session_id,
             message.ordinal,
@@ -857,6 +1006,7 @@ fn insert_message(conn: &Connection, session_id: &str, message: &TranscriptMessa
             message.cache_read_input_tokens,
             message.cache_creation_input_tokens,
             &message.model,
+            &message.effort,
         ],
     )?;
     Ok(())

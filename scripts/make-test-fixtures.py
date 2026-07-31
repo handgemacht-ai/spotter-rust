@@ -10,6 +10,7 @@ TOOL_SESSION = "d6e0bada-1959-4eec-a9d2-0bfade768d8f"
 SHORT_SESSION = "55604662-cf2a-4331-851a-ec234028f8ca"
 DISCOVERABLE_SESSION = "258c7280-ae70-4798-800f-63464d01a85d"
 SUBAGENT_SESSION = "491e126e-1e71-469c-ade2-fcc8af567c74"
+RANKED_SESSION = "7f3a9c1e-2b4d-4e5f-8a6b-9c0d1e2f3a4b"
 PROJECT_CWD = "/home/USER/projects/spotter"
 WORKTREE_CWD = "/home/USER/projects/spotter-worktrees/spotter-public-fixture"
 BASE = datetime(2026, 2, 10, 12, 0, tzinfo=timezone.utc)
@@ -19,6 +20,7 @@ def main() -> int:
     write_jsonl(ROOT / "tool_heavy.jsonl", tool_heavy_rows())
     write_jsonl(ROOT / "short.jsonl", short_rows())
     write_jsonl(ROOT / "subagent.jsonl", standalone_subagent_rows())
+    write_jsonl(Path("tests/fixtures/ranked") / "ranked.jsonl", ranked_rows())
     write_jsonl(ROOT / f"{DISCOVERABLE_SESSION}.jsonl", discoverable_rows())
     write_jsonl(
         ROOT / DISCOVERABLE_SESSION / "subagents" / "agent-a881341.jsonl",
@@ -170,6 +172,30 @@ def standalone_subagent_rows() -> list[dict]:
     return builder.rows
 
 
+def ranked_rows() -> list[dict]:
+    builder = RowBuilder(RANKED_SESSION, PROJECT_CWD, "master", "ranked-fixture")
+    # ordinal 1: both terms, short message (ranks well on length).
+    builder.user("zephyr quokka checklist")
+    # ordinal 2: highest term frequency for "zephyr" (ranks first).
+    builder.note("zephyr zephyr zephyr zephyr zephyr runbook")
+    # ordinal 3: both terms but not the phrase "quokka checklist".
+    builder.note("quokka sightings and zephyr checklist draft")
+    builder.tool_use(
+        "toolu_ranked_read",
+        "Read",
+        {"file_path": "docs/ranked.md"},
+        input_tokens=90,
+    )
+    # ordinal 5: >2000 chars, so FTS chunks it; both terms live near the end,
+    # past the second chunk boundary, to exercise chunk -> ordinal resolution.
+    filler = "alpha beta gamma delta epsilon zeta eta theta iota kappa " * 57
+    builder.tool_result(
+        "toolu_ranked_read",
+        filler + " final summary zephyr deployment quokka confirmed",
+    )
+    return builder.rows
+
+
 class RowBuilder:
     def __init__(
         self,
@@ -212,6 +238,7 @@ class RowBuilder:
         self._append(
             {
                 "type": "assistant",
+                "effort": "high",
                 "message": {
                     "id": message_id(self.session_id, len(self.rows)),
                     "type": "message",

@@ -91,6 +91,8 @@ pub struct TranscriptMessage {
     pub cache_creation_input_tokens: Option<i64>,
     /// Model name.
     pub model: Option<String>,
+    /// Reasoning effort setting on assistant rows (e.g. `xhigh`).
+    pub effort: Option<String>,
 }
 
 /// Parser failure.
@@ -305,6 +307,59 @@ struct RawTopLevel {
     error_details: Option<Value>,
     content: Option<Value>,
     message: Option<Value>,
+    // Newer Claude Code fields. `session_id` (snake_case variant) and `effort`
+    // are consumed; the rest are deliberately consume-and-ignore for now —
+    // they are metadata (refusals, retries, frames, agent-memory, relocation)
+    // with no analytics consumer yet.
+    #[serde(rename = "session_id")]
+    session_id_snake: Option<Value>,
+    effort: Option<Value>,
+    #[serde(rename = "hookAdditionalContext")]
+    hook_additional_context: Option<Value>,
+    #[serde(rename = "toolEndsTurn")]
+    tool_ends_turn: Option<Value>,
+    #[serde(rename = "apiErrorIsTransient")]
+    api_error_is_transient: Option<Value>,
+    #[serde(rename = "apiRefusalCategory")]
+    api_refusal_category: Option<Value>,
+    #[serde(rename = "apiRefusalExplanation")]
+    api_refusal_explanation: Option<Value>,
+    backup: Option<Value>,
+    choice: Option<Value>,
+    direction: Option<Value>,
+    #[serde(rename = "fallbackModel")]
+    fallback_model: Option<Value>,
+    #[serde(rename = "frameUrl")]
+    frame_url: Option<Value>,
+    #[serde(rename = "interruptedByShutdown")]
+    interrupted_by_shutdown: Option<Value>,
+    #[serde(rename = "isAbortedMidStream")]
+    is_aborted_mid_stream: Option<Value>,
+    key: Option<Value>,
+    #[serde(rename = "originalModel")]
+    original_model: Option<Value>,
+    path: Option<Value>,
+    #[serde(rename = "persistedAsDefault")]
+    persisted_as_default: Option<Value>,
+    #[serde(rename = "queuePriority")]
+    queue_priority: Option<Value>,
+    #[serde(rename = "refusedUserMessageUuid")]
+    refused_user_message_uuid: Option<Value>,
+    #[serde(rename = "relocatedCwd")]
+    relocated_cwd: Option<Value>,
+    result: Option<Value>,
+    #[serde(rename = "retractedMessageUuids")]
+    retracted_message_uuids: Option<Value>,
+    #[serde(rename = "snapshotMessageId")]
+    snapshot_message_id: Option<Value>,
+    #[serde(rename = "supersedesUuids")]
+    supersedes_uuids: Option<Value>,
+    title: Option<Value>,
+    #[serde(rename = "toolDenialKind")]
+    tool_denial_kind: Option<Value>,
+    #[serde(rename = "trackingPath")]
+    tracking_path: Option<Value>,
+    trigger: Option<Value>,
 }
 
 #[allow(dead_code)]
@@ -590,7 +645,7 @@ fn normalize_message(
         tool_use_id: string_field(top, "toolUseID").or_else(|| string_field(top, "toolUseId")),
         parent_tool_use_id: string_field(top, "parentToolUseID")
             .or_else(|| string_field(top, "parentToolUseId")),
-        session_id: string_field(top, "sessionId"),
+        session_id: string_field(top, "sessionId").or_else(|| string_field(top, "session_id")),
         slug: string_field(top, "slug"),
         cwd: string_field(top, "cwd"),
         git_branch: string_field(top, "gitBranch"),
@@ -602,6 +657,7 @@ fn normalize_message(
         cache_read_input_tokens: usage_tokens.cache_read,
         cache_creation_input_tokens: usage_tokens.cache_creation,
         model: message.and_then(|message| string_field(message, "model")),
+        effort: string_field(top, "effort"),
     })
 }
 
@@ -928,6 +984,36 @@ const TOP_LEVEL_FIELDS: &[&str] = &[
     "errorDetails",
     "content",
     "message",
+    // Newer Claude Code fields; see RawTopLevel for which are consumed.
+    "session_id",
+    "effort",
+    "hookAdditionalContext",
+    "toolEndsTurn",
+    "apiErrorIsTransient",
+    "apiRefusalCategory",
+    "apiRefusalExplanation",
+    "backup",
+    "choice",
+    "direction",
+    "fallbackModel",
+    "frameUrl",
+    "interruptedByShutdown",
+    "isAbortedMidStream",
+    "key",
+    "originalModel",
+    "path",
+    "persistedAsDefault",
+    "queuePriority",
+    "refusedUserMessageUuid",
+    "relocatedCwd",
+    "result",
+    "retractedMessageUuids",
+    "snapshotMessageId",
+    "supersedesUuids",
+    "title",
+    "toolDenialKind",
+    "trackingPath",
+    "trigger",
 ];
 
 const MESSAGE_FIELDS: &[&str] = &[
@@ -1289,6 +1375,49 @@ mod tests {
             let error = normalize_message(value, 0, "main", 1).expect_err("unknown key rejected");
             assert!(matches!(error, JsonlError::UnknownField { level: "message.usage.server_tool_use", .. }));
         }
+    }
+
+    #[test]
+    fn consumes_newer_top_level_fields() {
+        let mut value = base_message();
+        let top = value.as_object_mut().expect("object");
+        top.insert("session_id".to_string(), json!("session-a"));
+        top.insert("effort".to_string(), json!("xhigh"));
+        top.insert("hookAdditionalContext".to_string(), json!([]));
+        top.insert("toolEndsTurn".to_string(), json!(true));
+        top.insert("toolDenialKind".to_string(), json!("user-rejected"));
+        top.insert("apiRefusalCategory".to_string(), json!("cyber"));
+        top.insert("direction".to_string(), json!("retry"));
+        top.insert("key".to_string(), json!("v2:abc"));
+        top.insert("result".to_string(), json!({"report": "..."}));
+        top.insert("relocatedCwd".to_string(), json!("/tmp/moved"));
+        top.insert("queuePriority".to_string(), json!("later"));
+        top.insert("frameUrl".to_string(), json!("https://claude.ai/code/artifact/x"));
+        top.insert("path".to_string(), json!("/tmp/artifact.html"));
+        top.insert("title".to_string(), json!("A frame"));
+
+        let message = normalize_message(value, 0, "main", 1).expect("newer fields parse");
+
+        assert_eq!(message.effort.as_deref(), Some("xhigh"));
+        assert_eq!(message.session_id.as_deref(), Some("session-a"));
+    }
+
+    #[test]
+    fn snake_case_session_id_is_a_fallback_not_an_override() {
+        // Only the snake_case variant present: used as the session id.
+        let mut value = base_message();
+        let top = value.as_object_mut().expect("object");
+        top.remove("sessionId");
+        top.insert("session_id".to_string(), json!("session-snake"));
+        let message = normalize_message(value, 0, "main", 1).expect("snake session id");
+        assert_eq!(message.session_id.as_deref(), Some("session-snake"));
+
+        // Both present: camelCase wins (they carry the same value upstream).
+        let mut value = base_message();
+        let top = value.as_object_mut().expect("object");
+        top.insert("session_id".to_string(), json!("session-snake"));
+        let message = normalize_message(value, 0, "main", 1).expect("both session ids");
+        assert_eq!(message.session_id.as_deref(), Some("session-a"));
     }
 
     fn base_message() -> Value {

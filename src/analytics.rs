@@ -44,6 +44,27 @@ impl GroupKey {
     }
 }
 
+/// Compose the stable run identifier from transcript data.
+///
+/// A run id is `{session_id}:{tool_use_id}`. Both parts come straight from the
+/// JSONL transcript (never `SQLite` rowids), so the id is identical on the
+/// `transcripts` and `scan` paths and stable across re-syncs.
+pub fn run_id(session_id: &str, tool_use_id: &str) -> String {
+    format!("{session_id}:{tool_use_id}")
+}
+
+/// Split a run id back into its session id and tool use id.
+///
+/// Subagent session ids contain `:` themselves (`<parent>:agent:<agent_id>`),
+/// so the split is at the last `:`; tool use ids never contain one.
+pub fn parse_run_id(run_id: &str) -> Option<(&str, &str)> {
+    let (session_id, tool_use_id) = run_id.rsplit_once(':')?;
+    if session_id.is_empty() || tool_use_id.is_empty() {
+        return None;
+    }
+    Some((session_id, tool_use_id))
+}
+
 /// Common tool-call filters.
 #[derive(Debug, Default)]
 pub struct RunFilters {
@@ -168,6 +189,8 @@ pub struct ErrorPattern {
     pub sample_error: String,
     /// Sample session ids.
     pub sample_sessions: Vec<String>,
+    /// Sample run ids (`{session_id}:{tool_use_id}`) for drill-down.
+    pub sample_runs: Vec<String>,
     /// Category when classification is requested.
     pub category: Option<String>,
     /// Preventability when classification is requested.
@@ -368,6 +391,216 @@ pub fn search_runs_in(runs: Vec<ToolCallRun>, filters: &RunFilters) -> Vec<ToolC
     runs
 }
 
+/// A dimension `sample` can stratify by.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+#[value(rename_all = "snake_case")]
+pub enum StrataKey {
+    /// Stratify by tool name.
+    ToolName,
+    /// Stratify by run status.
+    Status,
+    /// Stratify by error taxonomy category; runs without errors form `none`.
+    Category,
+    /// Stratify by session.
+    Session,
+}
+
+impl StrataKey {
+    /// Canonical key name used in the sample envelope.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ToolName => "tool_name",
+            Self::Status => "status",
+            Self::Category => "category",
+            Self::Session => "session",
+        }
+    }
+
+    fn key_for(self, run: &ToolCallRun) -> String {
+        match self {
+            Self::ToolName => run.tool_name.clone(),
+            Self::Status => run.status.clone(),
+            Self::Category => {
+                if run.status == "error" {
+                    classify_error(run.error_content.as_deref().unwrap_or(""))
+                } else {
+                    "none".to_string()
+                }
+            }
+            Self::Session => run.session_id.clone(),
+        }
+    }
+}
+
+/// splitmix64: a tiny deterministic PRNG so sampling needs no dependencies.
+///
+/// Seeded, never wall-clock random: the same seed over the same corpus always
+/// draws the same runs, on both backends and every platform (wrapping integer
+/// ops only).
+#[derive(Debug, Clone)]
+pub struct Splitmix64 {
+    state: u64,
+}
+
+impl Splitmix64 {
+    /// Seed the generator.
+    pub const fn new(seed: u64) -> Self {
+        Self { state: seed }
+    }
+
+    /// Next pseudo-random `u64`.
+    pub fn next_u64(&mut self) -> u64 {
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+}
+
+/// One stratum's population vs drawn counts in a sample envelope.
+#[derive(Debug, Clone, Serialize)]
+pub struct StratumSummary {
+    /// Stratum key value.
+    pub key: String,
+    /// Filtered population in this stratum.
+    pub population: usize,
+    /// Runs drawn from this stratum.
+    pub sampled: usize,
+}
+
+/// Stratified sampling result (the `sample` JSON envelope).
+#[derive(Debug, Clone, Serialize)]
+pub struct SampleResult {
+    /// Strata dimension used.
+    pub stratify_by: String,
+    /// Seed used for the draw.
+    pub seed: u64,
+    /// Total filtered population sampled from.
+    pub population: usize,
+    /// Sampled runs (same shape `search` emits).
+    pub runs: Vec<ToolCallRun>,
+    /// Per-stratum population vs sampled counts.
+    pub strata: Vec<StratumSummary>,
+}
+
+/// Sample tool-call runs, stratified, from the store.
+pub fn sample_runs(
+    conn: &Connection,
+    filters: &RunFilters,
+    stratify: StrataKey,
+    count: usize,
+    seed: u64,
+) -> Result<SampleResult> {
+    Ok(sample_runs_in(
+        db::list_runs(conn)?,
+        filters,
+        stratify,
+        count,
+        seed,
+    ))
+}
+
+/// Stratified sampling against an already-loaded set.
+///
+/// Policy: runs are canonically ordered (`started_at`, `start_ordinal`,
+/// `tool_use_id`) so both backends sample the same population. Every non-empty
+/// stratum first gets an equal share `count / strata` (capped at its
+/// population) so rare strata — errors, one-off tools — are always
+/// represented; leftover slots then fill one at a time into the stratum with
+/// the most remaining headroom (ties broken by stratum key). Within a
+/// stratum, runs are drawn without replacement via seeded partial
+/// Fisher-Yates. No `--limit`-style cap applies beyond `count`.
+pub fn sample_runs_in(
+    runs: Vec<ToolCallRun>,
+    filters: &RunFilters,
+    stratify: StrataKey,
+    count: usize,
+    seed: u64,
+) -> SampleResult {
+    let mut runs = filter_runs(runs, filters);
+    sort_runs_canonical(&mut runs);
+    let population = runs.len();
+
+    let mut strata = BTreeMap::<String, Vec<ToolCallRun>>::new();
+    for run in runs {
+        strata.entry(stratify.key_for(&run)).or_default().push(run);
+    }
+    let keys = strata.keys().cloned().collect::<Vec<_>>();
+
+    let mut allocation = vec![0_usize; keys.len()];
+    if !keys.is_empty() && count > 0 {
+        let base = count / keys.len();
+        for (index, key) in keys.iter().enumerate() {
+            allocation[index] = base.min(strata[key].len());
+        }
+        let mut leftover = count - allocation.iter().sum::<usize>();
+        while leftover > 0 {
+            let mut best: Option<usize> = None;
+            for (index, key) in keys.iter().enumerate() {
+                let headroom = strata[key].len() - allocation[index];
+                if headroom == 0 {
+                    continue;
+                }
+                if best.map_or(true, |chosen| {
+                    headroom > strata[&keys[chosen]].len() - allocation[chosen]
+                }) {
+                    best = Some(index);
+                }
+            }
+            let Some(index) = best else {
+                break;
+            };
+            allocation[index] += 1;
+            leftover -= 1;
+        }
+    }
+
+    let mut rng = Splitmix64::new(seed);
+    let mut sampled_runs = Vec::new();
+    let mut summaries = Vec::new();
+    for (index, key) in keys.iter().enumerate() {
+        let stratum = &strata[key];
+        let take = allocation[index];
+        let mut indices = (0..stratum.len()).collect::<Vec<_>>();
+        for drawn in 0..take {
+            let span = (stratum.len() - drawn) as u64;
+            // Modulo in u64 first so the value fits usize on any target.
+            let pick = drawn + usize::try_from(rng.next_u64() % span).unwrap_or_default();
+            indices.swap(drawn, pick);
+        }
+        sampled_runs.extend(indices[..take].iter().map(|pick| stratum[*pick].clone()));
+        summaries.push(StratumSummary {
+            key: key.clone(),
+            population: stratum.len(),
+            sampled: take,
+        });
+    }
+    sort_runs_canonical(&mut sampled_runs);
+
+    SampleResult {
+        stratify_by: stratify.as_str().to_string(),
+        seed,
+        population,
+        runs: sampled_runs,
+        strata: summaries,
+    }
+}
+
+/// The canonical run order shared with `db::list_runs` and `scan search`, so
+/// both backends sample identically ordered populations.
+fn sort_runs_canonical(runs: &mut [ToolCallRun]) {
+    runs.sort_by(|left, right| {
+        left.started_at
+            .as_deref()
+            .unwrap_or("")
+            .cmp(right.started_at.as_deref().unwrap_or(""))
+            .then_with(|| left.start_ordinal.cmp(&right.start_ordinal))
+            .then_with(|| left.tool_use_id.cmp(&right.tool_use_id))
+    });
+}
+
 /// Options controlling per-file read-score computation.
 #[derive(Debug, Clone)]
 pub struct ReadScoreOptions {
@@ -501,40 +734,363 @@ pub fn read_scores_in(runs: Vec<ToolCallRun>, opts: &ReadScoreOptions) -> ReadSc
     }
 }
 
-/// Search transcript message content.
-pub fn search_content(conn: &Connection, text: &str, limit: usize) -> Result<Vec<MessageHit>> {
-    db::search_messages(conn, text, limit)
+/// Maximum chunk size (in chars) for full-text indexing.
+///
+/// Message `search_text` longer than this is split into overlapping windows so
+/// BM25 scores and snippets address fine-grained units instead of whole
+/// messages. Only the FTS index is chunked; the messages table is untouched.
+pub const FTS_CHUNK_CHARS: usize = 2_000;
+
+/// Overlap between consecutive chunks so matches spanning a boundary survive.
+pub const FTS_CHUNK_OVERLAP_CHARS: usize = 200;
+
+/// Lead-in context chars before the first match in a snippet.
+const SNIPPET_CONTEXT_CHARS: usize = 60;
+
+/// Maximum snippet body length in bytes (window cut on char boundaries).
+const SNIPPET_MAX_CHARS: usize = 180;
+
+/// Chunk rows fetched before per-message dedupe: `limit * FACTOR + BASE`. A
+/// single pathological message can span many chunks; the cap bounds query cost
+/// while leaving headroom for dedupe. Both backends apply the same cap.
+pub const CHUNK_ROW_CAP_FACTOR: usize = 25;
+/// See [`CHUNK_ROW_CAP_FACTOR`].
+pub const CHUNK_ROW_CAP_BASE: usize = 100;
+
+const BM25_K1: f64 = 1.2;
+const BM25_B: f64 = 0.75;
+/// `SQLite` FTS5 clamps non-positive idf to this value (verified empirically).
+const BM25_IDF_FLOOR: f64 = 1e-6;
+
+/// Split search text into FTS chunks. Short text yields a single chunk.
+pub fn chunk_search_text(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= FTS_CHUNK_CHARS {
+        return vec![text.to_string()];
+    }
+    let step = FTS_CHUNK_CHARS - FTS_CHUNK_OVERLAP_CHARS;
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    while start < chars.len() {
+        let end = (start + FTS_CHUNK_CHARS).min(chars.len());
+        chunks.push(chars[start..end].iter().collect());
+        if end == chars.len() {
+            break;
+        }
+        start += step;
+    }
+    chunks
 }
 
-/// Search transcript message content against an in-memory store.
+/// Tokenize like FTS5's unicode61: lowercase, split on non-alphanumerics.
 ///
-/// Mirrors the DB FTS path's contract (case-insensitive substring, snippets
-/// capped at 180 chars) so callers can swap between the two and get
-/// comparable hits.
-pub fn search_content_in(messages: &[StoredMessage], text: &str, limit: usize) -> Vec<MessageHit> {
-    let needle = text.trim().to_lowercase();
-    if needle.is_empty() {
+/// Intentional divergence: exotic case-fold expansions (e.g. `İ`) and unicode
+/// mark categories may tokenize differently from `SQLite`'s C implementation;
+/// ASCII text tokenizes identically.
+pub fn tokenize(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// A ranked chunk-level match, before per-message dedupe and snippet rendering.
+///
+/// Produced by the `SQLite` FTS5 query (`db`) and by the in-memory BM25
+/// implementation (`analytics`), then finalized identically for both backends.
+#[derive(Debug)]
+pub struct RankedChunk {
+    /// Internal session id.
+    pub session_id: String,
+    /// Claude Code session id.
+    pub external_session_id: String,
+    /// Project alias.
+    pub project_alias: String,
+    /// Parent message ordinal.
+    pub ordinal: i64,
+    /// Chunk index within the parent message.
+    pub chunk_index: i64,
+    /// Message type.
+    pub record_type: String,
+    /// Message role.
+    pub role: Option<String>,
+    /// Timestamp.
+    pub timestamp: Option<String>,
+    /// Raw chunk content (for snippet rendering).
+    pub content: String,
+    /// BM25 rank value (negative; lower is a better match).
+    pub rank: f64,
+}
+
+/// A ranked content hit: one per message, scored from its best chunk.
+#[derive(Debug, Clone, Serialize)]
+pub struct RankedHit {
+    /// Internal session id.
+    pub session_id: String,
+    /// Claude Code session id.
+    pub external_session_id: String,
+    /// Project alias.
+    pub project_alias: String,
+    /// Message ordinal (feeds `inspect --ordinals`).
+    pub ordinal: i64,
+    /// Message type.
+    pub record_type: String,
+    /// Message role.
+    pub role: Option<String>,
+    /// Timestamp.
+    pub timestamp: Option<String>,
+    /// BM25 rank value of the best chunk (negative; lower is a better match),
+    /// rounded to 6 decimals on both backends for stable JSON output.
+    pub score: f64,
+    /// Snippet of the best-matching chunk.
+    pub snippet: String,
+}
+
+/// Search transcript message content, ranked by BM25.
+pub fn search_content(
+    conn: &Connection,
+    text: &str,
+    limit: usize,
+    exact: bool,
+) -> Result<Vec<RankedHit>> {
+    let terms = tokenize(text);
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let query = if exact {
+        db::fts_phrase_query(text)
+    } else {
+        db::fts_terms_query(&terms)
+    };
+    let chunks = db::search_message_chunks(conn, &query, chunk_row_cap(limit))?;
+    Ok(finalize_ranked_hits(chunks, text, exact, limit))
+}
+
+/// In-memory BM25 equivalent of [`search_content`].
+///
+/// Reimplements FTS5's bm25 over the same chunks with a unicode61-like
+/// tokenizer so the scan backend returns the same hits in the same order.
+/// Scores use the identical formula (`idf = ln((N - n + 0.5) / (n + 0.5))`,
+/// clamped below at 1e-6; `k1 = 1.2`, `b = 0.75`) and are rounded to 6
+/// decimals on both paths, which absorbs any last-ulp float divergence.
+pub fn search_content_in(
+    messages: &[StoredMessage],
+    text: &str,
+    limit: usize,
+    exact: bool,
+) -> Vec<RankedHit> {
+    let terms = tokenize(text);
+    if terms.is_empty() {
         return Vec::new();
     }
+    let chunks = rank_chunks_in(messages, &terms, exact, limit);
+    finalize_ranked_hits(chunks, text, exact, limit)
+}
+
+/// Chunk rows kept before per-message dedupe on both backends.
+pub const fn chunk_row_cap(limit: usize) -> usize {
+    limit * CHUNK_ROW_CAP_FACTOR + CHUNK_ROW_CAP_BASE
+}
+
+/// Best chunk per message becomes the hit; snippets render from that chunk.
+fn finalize_ranked_hits(
+    chunks: Vec<RankedChunk>,
+    text: &str,
+    exact: bool,
+    limit: usize,
+) -> Vec<RankedHit> {
+    let terms = tokenize(text);
+    let phrase = exact.then(|| text.trim().to_lowercase());
+    let mut seen = std::collections::HashSet::new();
     let mut hits = Vec::new();
-    for message in messages {
-        if message.search_text.to_lowercase().contains(&needle) {
-            hits.push(MessageHit {
-                session_id: message.session_id.clone(),
-                external_session_id: message.external_session_id.clone(),
-                project_alias: message.project_alias.clone(),
-                ordinal: message.ordinal,
-                record_type: message.record_type.clone(),
-                role: message.role.clone(),
-                timestamp: message.timestamp.clone(),
-                snippet: truncate_chars(&message.search_text, 180),
-            });
-            if hits.len() >= limit {
-                break;
-            }
+    for chunk in chunks {
+        if !seen.insert((chunk.session_id.clone(), chunk.ordinal)) {
+            continue;
+        }
+        hits.push(RankedHit {
+            session_id: chunk.session_id,
+            external_session_id: chunk.external_session_id,
+            project_alias: chunk.project_alias,
+            ordinal: chunk.ordinal,
+            record_type: chunk.record_type,
+            role: chunk.role,
+            timestamp: chunk.timestamp,
+            score: round_score(chunk.rank),
+            snippet: render_snippet(&chunk.content, &terms, phrase.as_deref()),
+        });
+        if hits.len() >= limit {
+            break;
         }
     }
     hits
+}
+
+/// Round to 6 decimals so both backends emit identical JSON score values.
+pub(crate) fn round_score(score: f64) -> f64 {
+    format!("{score:.6}").parse().unwrap_or(score)
+}
+
+/// Render a deterministic snippet window around the first match anchor.
+///
+/// Snippets are computed in shared Rust code (not FTS5 `snippet()`) so both
+/// backends emit byte-identical text.
+fn render_snippet(content: &str, terms: &[String], phrase: Option<&str>) -> String {
+    let lower = content.to_lowercase();
+    let anchor = phrase
+        .and_then(|needle| lower.find(needle))
+        .or_else(|| {
+            terms
+                .iter()
+                .filter_map(|term| lower.find(term.as_str()))
+                .min()
+        })
+        .unwrap_or(0)
+        .min(content.len());
+    let mut start = anchor.saturating_sub(SNIPPET_CONTEXT_CHARS);
+    while !content.is_char_boundary(start) {
+        start += 1;
+    }
+    let mut end = (start + SNIPPET_MAX_CHARS).min(content.len());
+    while !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut snippet = String::new();
+    if start > 0 {
+        snippet.push('…');
+    }
+    snippet.push_str(&content[start..end]);
+    if end < content.len() {
+        snippet.push('…');
+    }
+    snippet
+}
+
+struct ChunkDoc<'a> {
+    message: &'a StoredMessage,
+    chunk_index: i64,
+    content: String,
+    tokens: Vec<String>,
+}
+
+/// Score every chunk of every message with the FTS5 bm25 formula and return
+/// matching chunks in rank order (rank, then session, ordinal, chunk).
+fn rank_chunks_in(
+    messages: &[StoredMessage],
+    terms: &[String],
+    exact: bool,
+    limit: usize,
+) -> Vec<RankedChunk> {
+    let mut docs = Vec::new();
+    for message in messages {
+        for (index, chunk) in chunk_search_text(&message.search_text)
+            .into_iter()
+            .enumerate()
+        {
+            let tokens = tokenize(&chunk);
+            docs.push(ChunkDoc {
+                message,
+                chunk_index: index as i64,
+                content: chunk,
+                tokens,
+            });
+        }
+    }
+    if docs.is_empty() {
+        return Vec::new();
+    }
+
+    let n_docs = docs.len() as f64;
+    let avgdl = docs.iter().map(|doc| doc.tokens.len() as f64).sum::<f64>() / n_docs;
+    let idf = |matching: usize| {
+        let n = matching as f64;
+        let idf = ((n_docs - n + 0.5) / (n + 0.5)).ln();
+        if idf <= 0.0 {
+            BM25_IDF_FLOOR
+        } else {
+            idf
+        }
+    };
+
+    // Per-term document frequencies, or the phrase frequency for --exact.
+    let term_dfs: Vec<f64> = if exact {
+        vec![idf(docs
+            .iter()
+            .filter(|doc| phrase_occurrences(&doc.tokens, terms) > 0)
+            .count())]
+    } else {
+        terms
+            .iter()
+            .map(|term| {
+                idf(docs
+                    .iter()
+                    .filter(|doc| doc.tokens.iter().any(|token| token == term))
+                    .count())
+            })
+            .collect()
+    };
+
+    let mut chunks = Vec::new();
+    for doc in &docs {
+        let dl = doc.tokens.len() as f64;
+        // Default semantics are AND: every term must occur.
+        // No mul_add anywhere in the score path: float op order mirrors
+        // SQLite's bm25 C code so both backends round to identical scores.
+        #[allow(clippy::suboptimal_flops)]
+        let score = if exact {
+            let tf = phrase_occurrences(&doc.tokens, terms) as f64;
+            (tf > 0.0).then(|| term_dfs[0] * tf_component(tf, dl, avgdl))
+        } else {
+            terms
+                .iter()
+                .enumerate()
+                .try_fold(0.0, |score, (index, term)| {
+                    let tf = doc.tokens.iter().filter(|token| *token == term).count() as f64;
+                    (tf > 0.0).then(|| score + term_dfs[index] * tf_component(tf, dl, avgdl))
+                })
+        };
+        let Some(score) = score else {
+            continue;
+        };
+        chunks.push(RankedChunk {
+            session_id: doc.message.session_id.clone(),
+            external_session_id: doc.message.external_session_id.clone(),
+            project_alias: doc.message.project_alias.clone(),
+            ordinal: doc.message.ordinal,
+            chunk_index: doc.chunk_index,
+            record_type: doc.message.record_type.clone(),
+            role: doc.message.role.clone(),
+            timestamp: doc.message.timestamp.clone(),
+            content: doc.content.clone(),
+            rank: -score,
+        });
+    }
+    chunks.sort_by(|left, right| {
+        left.rank
+            .partial_cmp(&right.rank)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.session_id.cmp(&right.session_id))
+            .then_with(|| left.ordinal.cmp(&right.ordinal))
+            .then_with(|| left.chunk_index.cmp(&right.chunk_index))
+    });
+    chunks.truncate(chunk_row_cap(limit));
+    chunks
+}
+
+#[allow(clippy::suboptimal_flops)]
+fn tf_component(tf: f64, dl: f64, avgdl: f64) -> f64 {
+    (tf * (BM25_K1 + 1.0)) / (tf + BM25_K1 * ((1.0 - BM25_B) + BM25_B * (dl / avgdl)))
+}
+
+/// Count occurrences of the token sequence (FTS5 phrase semantics: tokens must
+/// be consecutive; punctuation between them is irrelevant).
+fn phrase_occurrences(tokens: &[String], phrase: &[String]) -> usize {
+    if phrase.is_empty() || tokens.len() < phrase.len() {
+        return 0;
+    }
+    tokens
+        .windows(phrase.len())
+        .filter(|window| *window == phrase)
+        .count()
 }
 
 /// A normalized message kept in-memory by the scan path.
@@ -568,6 +1124,7 @@ pub fn inspect_runs(
     tool_use_id: Option<&str>,
     status: Option<&str>,
     context: Option<usize>,
+    ordinals: Option<(i64, i64)>,
 ) -> Result<Vec<ToolCallRun>> {
     let session = db::find_session(conn, session_id)?
         .ok_or_else(|| anyhow::anyhow!("Session not found: {session_id}"))?;
@@ -577,6 +1134,7 @@ pub fn inspect_runs(
         tool_use_id,
         status,
         context,
+        ordinals,
     ))
 }
 
@@ -587,6 +1145,7 @@ pub fn inspect_runs_in(
     tool_use_id: Option<&str>,
     status: Option<&str>,
     context: Option<usize>,
+    ordinals: Option<(i64, i64)>,
 ) -> Vec<ToolCallRun> {
     let mut runs = all_runs
         .into_iter()
@@ -601,6 +1160,13 @@ pub fn inspect_runs_in(
             .cmp(&right.start_ordinal.unwrap_or(i64::MAX))
             .then_with(|| left.tool_use_id.cmp(&right.tool_use_id))
     });
+
+    if let Some((min, max)) = ordinals {
+        runs.retain(|run| {
+            run.start_ordinal
+                .is_some_and(|start| start <= max && run.end_ordinal.unwrap_or(start) >= min)
+        });
+    }
 
     if let Some(tool_use_id) = tool_use_id {
         context_window(
@@ -839,6 +1405,11 @@ pub fn error_analysis_in(
                     .collect::<std::collections::BTreeSet<_>>()
                     .into_iter()
                     .take(3)
+                    .collect(),
+                sample_runs: group
+                    .iter()
+                    .take(3)
+                    .map(|run| run_id(&run.session_id, &run.tool_use_id))
                     .collect(),
                 category: category.clone(),
                 preventability: category.as_deref().map(error_preventability),
@@ -1308,7 +1879,8 @@ fn average_duration<'a>(runs: impl Iterator<Item = &'a ToolCallRun>) -> Option<i
     (!durations.is_empty()).then(|| durations.iter().sum::<i64>() / durations.len() as i64)
 }
 
-fn percentile(sorted: &[i64], pct: usize) -> Option<i64> {
+/// Percentile over a sorted slice (ceil index); `None` when empty.
+pub fn percentile(sorted: &[i64], pct: usize) -> Option<i64> {
     if sorted.is_empty() {
         return None;
     }
@@ -1358,7 +1930,8 @@ fn normalize_error(content: &str) -> String {
     truncate_chars(&number_normalized, 120)
 }
 
-fn classify_error(content: &str) -> String {
+/// Classify an error message into the 12-class taxonomy.
+pub fn classify_error(content: &str) -> String {
     let lower = content.to_ascii_lowercase();
     if lower.contains("doesn't want to proceed") || lower.contains("was rejected") {
         "user_rejected"
@@ -1448,7 +2021,8 @@ impl UsageMessage {
     }
 }
 
-fn usage_messages(conn: &Connection, session_id: &str) -> Result<Vec<UsageMessage>> {
+/// Load usage-bearing messages for one session (token-health input).
+pub fn usage_messages(conn: &Connection, session_id: &str) -> Result<Vec<UsageMessage>> {
     let mut stmt = conn.prepare(
         "SELECT ordinal, timestamp, COALESCE(input_tokens, 0), COALESCE(output_tokens, 0), COALESCE(cache_read_input_tokens, 0), COALESCE(cache_creation_input_tokens, 0), model, raw_payload \
          FROM messages WHERE session_id = ?1 AND input_tokens IS NOT NULL ORDER BY ordinal",
@@ -1735,6 +2309,115 @@ fn round2(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_id_round_trips_through_parse() {
+        let id = run_id("session-a", "toolu_123");
+        assert_eq!(id, "session-a:toolu_123");
+        assert_eq!(parse_run_id(&id), Some(("session-a", "toolu_123")));
+    }
+
+    #[test]
+    fn parse_run_id_splits_subagent_session_at_last_colon() {
+        let id = run_id("parent:agent:abc123", "toolu_123");
+        assert_eq!(
+            parse_run_id(&id),
+            Some(("parent:agent:abc123", "toolu_123"))
+        );
+    }
+
+    #[test]
+    fn parse_run_id_rejects_malformed_ids() {
+        assert_eq!(parse_run_id("no-colon"), None);
+        assert_eq!(parse_run_id(":toolu_123"), None);
+        assert_eq!(parse_run_id("session-a:"), None);
+    }
+
+    #[test]
+    fn splitmix64_is_deterministic_and_seed_sensitive() {
+        let mut first = Splitmix64::new(7);
+        let mut second = Splitmix64::new(7);
+        let mut other = Splitmix64::new(8);
+        let stream_a = (0..8).map(|_| first.next_u64()).collect::<Vec<_>>();
+        let stream_b = (0..8).map(|_| second.next_u64()).collect::<Vec<_>>();
+        let stream_c = (0..8).map(|_| other.next_u64()).collect::<Vec<_>>();
+        assert_eq!(stream_a, stream_b);
+        assert_ne!(stream_a, stream_c);
+    }
+
+    #[test]
+    fn sample_is_deterministic_per_seed() {
+        let corpus = || {
+            (0..20)
+                .map(|index| run(&format!("toolu_{index}"), "Bash", "completed", index))
+                .collect::<Vec<_>>()
+        };
+        let draw = |seed| {
+            sample_runs_in(
+                corpus(),
+                &RunFilters::default(),
+                StrataKey::ToolName,
+                10,
+                seed,
+            )
+            .runs
+            .iter()
+            .map(|run| run.tool_use_id.clone())
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(draw(1), draw(1), "same seed must redraw the same runs");
+        assert_ne!(draw(1), draw(2), "different seeds must draw differently");
+    }
+
+    #[test]
+    fn sample_allocation_guarantees_rare_strata() {
+        let mut corpus = (0..18)
+            .map(|index| run(&format!("toolu_ok_{index}"), "Bash", "completed", index))
+            .collect::<Vec<_>>();
+        corpus.push(run("toolu_err", "Bash", "error", 100));
+        corpus.push(run("toolu_live", "Bash", "ongoing", 101));
+
+        let result = sample_runs_in(corpus, &RunFilters::default(), StrataKey::Status, 4, 42);
+        let by_key = result
+            .strata
+            .iter()
+            .map(|stratum| (stratum.key.as_str(), stratum.sampled))
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(by_key["error"], 1, "rare error stratum must be drawn");
+        assert_eq!(by_key["ongoing"], 1);
+        assert_eq!(by_key["completed"], 2, "leftover fills the largest stratum");
+        assert_eq!(result.runs.len(), 4);
+        assert!(result.runs.iter().any(|run| run.tool_use_id == "toolu_err"));
+    }
+
+    #[test]
+    fn sample_caps_at_population() {
+        let corpus = (0..3)
+            .map(|index| run(&format!("toolu_{index}"), "Read", "completed", index))
+            .collect::<Vec<_>>();
+        let result = sample_runs_in(corpus, &RunFilters::default(), StrataKey::ToolName, 50, 42);
+        assert_eq!(result.runs.len(), 3);
+        assert_eq!(result.strata[0].sampled, 3);
+    }
+
+    #[test]
+    fn sample_category_stratifies_errors_by_taxonomy() {
+        let denied = run("toolu_denied", "Bash", "error", 1);
+        let ok = run("toolu_ok", "Bash", "completed", 2);
+        let result = sample_runs_in(
+            vec![denied, ok],
+            &RunFilters::default(),
+            StrataKey::Category,
+            2,
+            42,
+        );
+        let keys = result
+            .strata
+            .iter()
+            .map(|stratum| stratum.key.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(keys, ["exit_code", "none"]);
+    }
 
     fn run(id: &str, tool: &str, status: &str, ordinal: i64) -> ToolCallRun {
         ToolCallRun {

@@ -13,4 +13,7 @@ Commands:
   spotter transcripts errors     Analyze tool call errors
   spotter transcripts health     Analyze transcript token health
   spotter transcripts sequences  Find tool call patterns and retries
+  spotter transcripts profile    One-call dimensional overview of a scope
+  spotter transcripts sample     Draw a stratified, seeded sample of tool-call runs
+  spotter transcripts similar    Find runs similar to an exemplar run via local embeddings
 stderr:

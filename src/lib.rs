@@ -35,6 +35,7 @@ pub mod analytics;
 pub mod cli;
 pub mod config;
 pub mod db;
+pub mod embed;
 pub mod jsonl;
 pub mod metric_cochange_session;
 pub mod metric_cost;
