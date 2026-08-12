@@ -66,7 +66,7 @@ pub fn read_clusters(facts: &[SessionFacts], opts: &RelationsOptions) -> ReadClu
     let mut pair_sessions: BTreeMap<(&str, &str), BTreeSet<usize>> = BTreeMap::new();
 
     for (idx, session) in facts.iter().enumerate() {
-        if session.is_coordinator {
+        if session.coordination.is_coordinator() {
             continue;
         }
         // Distinct files read in this session (BTreeSet keeps them sorted).

@@ -6,6 +6,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 
 use crate::session_facts::{RelationsOptions, SessionFacts};
+use crate::timestamp::Timestamp;
 
 /// Distinct-editing-session count at or above which a file earns the rework badge.
 const REWORK_BADGE_THRESHOLD: usize = 5;
@@ -47,7 +48,7 @@ pub fn rework(facts: &[SessionFacts], opts: &RelationsOptions) -> ReworkResult {
     let mut sessions_by_path: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for session in facts {
         for edit in &session.edits {
-            if edit.path.is_empty() || !in_window(edit.ts.as_deref(), window_start) {
+            if edit.path.is_empty() || !in_window(edit.ts, window_start) {
                 continue;
             }
             sessions_by_path
@@ -84,7 +85,6 @@ pub fn rework(facts: &[SessionFacts], opts: &RelationsOptions) -> ReworkResult {
 /// Absent or unparseable timestamps are kept: the transcript file list is already
 /// mtime-pruned to the window, so an undated edit (e.g. a Bash-detected write with
 /// no `started_at`) cannot be proven out of range and is not dropped.
-fn in_window(ts: Option<&str>, window_start: DateTime<Utc>) -> bool {
-    ts.and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
-        .map_or(true, |parsed| parsed.with_timezone(&Utc) >= window_start)
+fn in_window(ts: Option<Timestamp>, window_start: DateTime<Utc>) -> bool {
+    ts.map_or(true, |ts| *ts.as_inner() >= window_start)
 }

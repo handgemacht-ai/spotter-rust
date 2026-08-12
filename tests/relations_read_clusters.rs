@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use chrono::{TimeZone, Utc};
 use spotter::metric_read_clusters::read_clusters;
-use spotter::session_facts::{FileEvent, RelationsOptions, SessionFacts};
+use spotter::session_facts::{CoordinationClass, FileEvent, RelationsOptions, SessionFacts};
 
 const GOLDEN: &str = "tests/golden/scan_relations/read_clusters.json";
 
@@ -26,7 +26,11 @@ fn opts() -> RelationsOptions {
 fn reading_session(id: &str, coordinator: bool, reads: &[&str]) -> SessionFacts {
     SessionFacts {
         external_session_id: id.to_string(),
-        is_coordinator: coordinator,
+        coordination: if coordinator {
+            CoordinationClass::MultiRig
+        } else {
+            CoordinationClass::Single
+        },
         rigs: BTreeSet::new(),
         edits: Vec::new(),
         reads: reads

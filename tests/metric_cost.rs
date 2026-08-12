@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use chrono::{TimeZone, Utc};
 use spotter::metric_cost::cost;
-use spotter::session_facts::{RelationsOptions, SessionFacts, TurnUsage};
+use spotter::session_facts::{CoordinationClass, RelationsOptions, SessionFacts, TurnUsage};
 
 const GOLDEN: &str = "tests/golden/metric_cost/cost.json";
 
@@ -43,7 +43,7 @@ fn fixed_facts() -> Vec<SessionFacts> {
     vec![
         SessionFacts {
             external_session_id: "sess-single".to_string(),
-            is_coordinator: false,
+            coordination: CoordinationClass::Single,
             rigs: BTreeSet::from(["/srv/town/rig-a".to_string()]),
             edits: Vec::new(),
             reads: Vec::new(),
@@ -61,7 +61,7 @@ fn fixed_facts() -> Vec<SessionFacts> {
         },
         SessionFacts {
             external_session_id: "sess-coord".to_string(),
-            is_coordinator: true,
+            coordination: CoordinationClass::MultiRig,
             rigs: BTreeSet::from(["/srv/town/rig-a".to_string(), "/srv/town/rig-b".to_string()]),
             edits: Vec::new(),
             reads: Vec::new(),

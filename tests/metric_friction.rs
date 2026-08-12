@@ -9,8 +9,9 @@ use std::path::PathBuf;
 
 use spotter::metric_friction::friction;
 use spotter::session_facts::{
-    FileEvent, RelationsOptions, SessionEvent, SessionEventKind, SessionFacts,
+    CoordinationClass, FileEvent, RelationsOptions, SessionEvent, SessionEventKind, SessionFacts,
 };
+use spotter::timestamp::Timestamp;
 
 const GOLDEN: &str = "tests/golden/metric_friction/friction.json";
 
@@ -25,7 +26,7 @@ fn fixed_opts() -> RelationsOptions {
 
 fn event(ts: &str) -> SessionEvent {
     SessionEvent {
-        ts: Some(ts.to_string()),
+        ts: Timestamp::parse(ts),
         kind: SessionEventKind::Other,
         path: None,
         success: true,
@@ -50,7 +51,11 @@ fn session(
 ) -> SessionFacts {
     SessionFacts {
         external_session_id: id.to_string(),
-        is_coordinator: coordinator,
+        coordination: if coordinator {
+            CoordinationClass::MultiRig
+        } else {
+            CoordinationClass::Single
+        },
         rigs: BTreeSet::new(),
         edits: edits.iter().map(|path| touch(path)).collect(),
         reads: reads.iter().map(|path| touch(path)).collect(),

@@ -15,7 +15,9 @@ use std::path::PathBuf;
 
 use chrono::{TimeZone, Utc};
 use spotter::metric_discoverability::discoverability;
-use spotter::session_facts::{RelationsOptions, SessionEvent, SessionEventKind, SessionFacts};
+use spotter::session_facts::{
+    CoordinationClass, RelationsOptions, SessionEvent, SessionEventKind, SessionFacts,
+};
 
 const GOLDEN: &str = "tests/golden/metric_discoverability/result.json";
 
@@ -57,7 +59,11 @@ fn glob() -> SessionEvent {
 fn session(id: &str, is_coordinator: bool, events: Vec<SessionEvent>) -> SessionFacts {
     SessionFacts {
         external_session_id: id.to_string(),
-        is_coordinator,
+        coordination: if is_coordinator {
+            CoordinationClass::MultiRig
+        } else {
+            CoordinationClass::Single
+        },
         rigs: BTreeSet::new(),
         edits: Vec::new(),
         reads: Vec::new(),

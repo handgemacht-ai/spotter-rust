@@ -3,7 +3,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::DateTime;
 use serde::Serialize;
 
 use crate::session_facts::{RelationsOptions, SessionFacts};
@@ -64,7 +63,10 @@ pub fn friction(facts: &[SessionFacts], opts: &RelationsOptions) -> FrictionResu
     let mut readers: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     let mut editors: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
 
-    for session in facts.iter().filter(|session| !session.is_coordinator) {
+    for session in facts
+        .iter()
+        .filter(|session| !session.coordination.is_coordinator())
+    {
         let sid = session.external_session_id.as_str();
         active.insert(sid, active_seconds(session));
         for event in &session.reads {
@@ -112,9 +114,8 @@ fn active_seconds(session: &SessionFacts) -> i64 {
     let mut seconds: Vec<i64> = session
         .events
         .iter()
-        .filter_map(|event| event.ts.as_deref())
-        .filter_map(|ts| DateTime::parse_from_rfc3339(ts).ok())
-        .map(|dt| dt.timestamp())
+        .filter_map(|event| event.ts)
+        .map(|ts| ts.as_inner().timestamp())
         .collect();
     seconds.sort_unstable();
     seconds
@@ -161,8 +162,10 @@ mod tests {
 
     use super::{friction, FrictionFile, FrictionResult};
     use crate::session_facts::{
-        FileEvent, RelationsOptions, SessionEvent, SessionEventKind, SessionFacts,
+        CoordinationClass, FileEvent, RelationsOptions, SessionEvent, SessionEventKind,
+        SessionFacts,
     };
+    use crate::timestamp::Timestamp;
 
     fn opts() -> RelationsOptions {
         RelationsOptions {
@@ -174,7 +177,7 @@ mod tests {
 
     fn event(ts: &str) -> SessionEvent {
         SessionEvent {
-            ts: Some(ts.to_string()),
+            ts: Timestamp::parse(ts),
             kind: SessionEventKind::Other,
             path: None,
             success: true,
@@ -199,7 +202,11 @@ mod tests {
     ) -> SessionFacts {
         SessionFacts {
             external_session_id: id.to_string(),
-            is_coordinator: coordinator,
+            coordination: if coordinator {
+                CoordinationClass::MultiRig
+            } else {
+                CoordinationClass::Single
+            },
             rigs: BTreeSet::new(),
             edits: edits.iter().map(|path| touch(path)).collect(),
             reads: reads.iter().map(|path| touch(path)).collect(),

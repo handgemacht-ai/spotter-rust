@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::db::{self, MessageHit, SessionRecord, ToolCallRun};
 use crate::jsonl::TranscriptMessage;
+use crate::timestamp::Timestamp;
 
 /// A tool-call field that `compare` and `aggregate` can group by.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
@@ -435,8 +436,8 @@ pub fn read_scores_in(runs: Vec<ToolCallRun>, opts: &ReadScoreOptions) -> ReadSc
         // recency-weighted score rather than guessing an age.
         let weight = run
             .started_at
-            .as_deref()
-            .and_then(parse_timestamp)
+            .as_ref()
+            .map(|ts| *ts.as_inner())
             .map_or(0.0, |timestamp| {
                 let age_days = (opts.now - timestamp).num_seconds().max(0) as f64 / 86_400.0;
                 0.5f64.powf(age_days / half_life)
@@ -461,10 +462,14 @@ pub fn read_scores_in(runs: Vec<ToolCallRun>, opts: &ReadScoreOptions) -> ReadSc
             let entry = acc.entry(path).or_insert((0.0, 0, None));
             entry.0 += weight;
             entry.1 += 1;
-            if let Some(ts) = run.started_at.as_deref() {
-                let newer = entry.2.as_deref().map_or(true, |existing| ts > existing);
+            if let Some(ts) = run.started_at.as_ref() {
+                let ts_str = ts.to_rfc3339();
+                let newer = entry
+                    .2
+                    .as_deref()
+                    .map_or(true, |existing| ts_str.as_str() > existing);
                 if newer {
-                    entry.2 = Some(ts.to_string());
+                    entry.2 = Some(ts_str);
                 }
             }
         }
@@ -830,8 +835,12 @@ pub fn error_analysis_in(
                 tool_name,
                 fingerprint,
                 count: group.len(),
-                first_seen: group.first().and_then(|run| run.started_at.clone()),
-                last_seen: group.last().and_then(|run| run.started_at.clone()),
+                first_seen: group
+                    .first()
+                    .and_then(|run| run.started_at.as_ref().map(Timestamp::to_rfc3339)),
+                last_seen: group
+                    .last()
+                    .and_then(|run| run.started_at.as_ref().map(Timestamp::to_rfc3339)),
                 sample_error: truncate_chars(&sample, 300),
                 sample_sessions: group
                     .iter()
@@ -911,7 +920,13 @@ pub fn health_project_in(
         .filter(|(session, _)| project.map_or(true, |value| session.project_alias == value))
         .filter(|(session, _)| {
             since.map_or(true, |since| {
-                session.started_at.as_deref().unwrap_or("") >= since
+                session
+                    .started_at
+                    .as_ref()
+                    .map(Timestamp::to_rfc3339)
+                    .unwrap_or_default()
+                    .as_str()
+                    >= since
             })
         })
         .collect::<Vec<_>>();
@@ -1179,7 +1194,12 @@ pub fn filter_runs(runs: Vec<ToolCallRun>, filters: &RunFilters) -> Vec<ToolCall
         })
         .filter(|run| {
             filters.since.as_ref().map_or(true, |since| {
-                run.started_at.as_deref().unwrap_or("") >= since.as_str()
+                run.started_at
+                    .as_ref()
+                    .map(Timestamp::to_rfc3339)
+                    .unwrap_or_default()
+                    .as_str()
+                    >= since.as_str()
             })
         })
         .collect()
@@ -1754,8 +1774,8 @@ mod tests {
             output_size: Some(20),
             file_paths: vec!["src/main.rs".to_string()],
             status: status.to_string(),
-            started_at: Some(format!("2026-01-01T00:00:{ordinal:02}Z")),
-            finished_at: Some(format!("2026-01-01T00:00:{:02}Z", ordinal + 1)),
+            started_at: Timestamp::parse(&format!("2026-01-01T00:00:{ordinal:02}Z")),
+            finished_at: Timestamp::parse(&format!("2026-01-01T00:00:{:02}Z", ordinal + 1)),
             duration_ms: Some(100 + ordinal),
             start_ordinal: Some(ordinal),
             end_ordinal: Some(ordinal + 1),
@@ -1981,15 +2001,15 @@ mod tests {
 
         let mut recent = run("toolu_recent", "Read", "completed", 1);
         recent.file_paths = vec!["/srv/town/levio/.claude/worktrees/wt-a/README.md".to_string()];
-        recent.started_at = Some("2026-06-22T00:00:00Z".to_string()); // ~1 day old
+        recent.started_at = Timestamp::parse("2026-06-22T00:00:00Z"); // ~1 day old
 
         let mut also_recent = run("toolu_recent2", "Read", "completed", 2);
         also_recent.file_paths = vec!["/srv/town/levio/README.md".to_string()];
-        also_recent.started_at = Some("2026-06-21T00:00:00Z".to_string()); // ~2 days old
+        also_recent.started_at = Timestamp::parse("2026-06-21T00:00:00Z"); // ~2 days old
 
         let mut old = run("toolu_old", "Read", "completed", 3);
         old.file_paths = vec!["/srv/town/levio/OLD.md".to_string()];
-        old.started_at = Some("2026-01-01T00:00:00Z".to_string()); // months old
+        old.started_at = Timestamp::parse("2026-01-01T00:00:00Z"); // months old
 
         let mut non_md = run("toolu_code", "Read", "completed", 4);
         non_md.file_paths = vec!["/srv/town/levio/src/main.rs".to_string()];

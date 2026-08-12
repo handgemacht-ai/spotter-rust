@@ -152,7 +152,7 @@ pub fn docs_steer(facts: &[SessionFacts], opts: &RelationsOptions) -> DocsSteerR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session_facts::SessionEvent;
+    use crate::session_facts::{CoordinationClass, SessionEvent};
     use chrono::{TimeZone, Utc};
 
     fn opts() -> RelationsOptions {
@@ -176,7 +176,7 @@ mod tests {
     fn session(id: &str, events: Vec<SessionEvent>) -> SessionFacts {
         SessionFacts {
             external_session_id: id.to_string(),
-            is_coordinator: false,
+            coordination: CoordinationClass::Single,
             rigs: BTreeSet::new(),
             edits: Vec::new(),
             reads: Vec::new(),

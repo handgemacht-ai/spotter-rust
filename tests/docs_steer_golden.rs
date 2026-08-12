@@ -11,7 +11,9 @@ use std::path::PathBuf;
 
 use chrono::{TimeZone, Utc};
 use spotter::metric_docs_steer::docs_steer;
-use spotter::session_facts::{RelationsOptions, SessionEvent, SessionEventKind, SessionFacts};
+use spotter::session_facts::{
+    CoordinationClass, RelationsOptions, SessionEvent, SessionEventKind, SessionFacts,
+};
 
 const GOLDEN: &str = "tests/golden/docs_steer/steer.json";
 const ROOT: &str = "/srv/town/rig";
@@ -57,7 +59,7 @@ const fn grep() -> SessionEvent {
 fn session(id: &str, events: Vec<SessionEvent>) -> SessionFacts {
     SessionFacts {
         external_session_id: id.to_string(),
-        is_coordinator: false,
+        coordination: CoordinationClass::Single,
         rigs: BTreeSet::new(),
         edits: Vec::new(),
         reads: Vec::new(),

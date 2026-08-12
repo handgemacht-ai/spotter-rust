@@ -24,6 +24,7 @@ use crate::db::{
     session_record_from_parsed, transcript_files_under, SessionRecord, ToolCallRun,
 };
 use crate::jsonl::{self, ParsedSession, TranscriptMessage};
+use crate::timestamp::Timestamp;
 
 /// In-memory transcript dataset used by every `scan <verb>`.
 #[derive(Debug, Default)]
@@ -236,7 +237,7 @@ pub struct LeanMessage {
     /// Message role.
     pub role: Option<String>,
     /// RFC3339 timestamp, when present.
-    pub timestamp: Option<String>,
+    pub timestamp: Option<Timestamp>,
     /// Per-row working directory, falling back to the session cwd.
     pub cwd: Option<String>,
     /// Input tokens; `None` marks a message without usage.
@@ -327,7 +328,7 @@ fn lean_message_from(
         ordinal: message.ordinal,
         message_id: message.message_id.clone(),
         role: message.role.clone(),
-        timestamp: message.timestamp.map(|timestamp| timestamp.to_rfc3339()),
+        timestamp: message.timestamp.map(Timestamp::from),
         cwd: message.cwd.clone().or_else(|| parsed.cwd.clone()),
         input_tokens: message.input_tokens,
         output_tokens: message.output_tokens.unwrap_or(0),

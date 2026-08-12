@@ -15,6 +15,7 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::jsonl::{content_blocks, is_known_content_block_type, ParsedSession, TranscriptMessage};
+use crate::timestamp::Timestamp;
 
 const SCHEMA_VERSION: i32 = 5;
 
@@ -44,9 +45,9 @@ pub struct SessionRecord {
     /// Claude Code version.
     pub version: Option<String>,
     /// Started timestamp.
-    pub started_at: Option<String>,
+    pub started_at: Option<Timestamp>,
     /// Ended timestamp.
-    pub ended_at: Option<String>,
+    pub ended_at: Option<Timestamp>,
     /// Message count.
     pub message_count: i64,
 }
@@ -87,9 +88,9 @@ pub struct ToolCallRun {
     /// Run status.
     pub status: String,
     /// Start timestamp.
-    pub started_at: Option<String>,
+    pub started_at: Option<Timestamp>,
     /// Finish timestamp.
-    pub finished_at: Option<String>,
+    pub finished_at: Option<Timestamp>,
     /// Duration in milliseconds.
     pub duration_ms: Option<i64>,
     /// Starting message ordinal.
@@ -364,8 +365,8 @@ pub fn session_record_from_parsed(
         slug: parsed.slug.clone(),
         git_branch: parsed.git_branch.clone(),
         version: parsed.version.clone(),
-        started_at: parsed.started_at.map(|timestamp| timestamp.to_rfc3339()),
-        ended_at: parsed.ended_at.map(|timestamp| timestamp.to_rfc3339()),
+        started_at: parsed.started_at.map(Timestamp::from),
+        ended_at: parsed.ended_at.map(Timestamp::from),
         message_count: parsed.message_count as i64,
     };
     Ok(record)
@@ -402,8 +403,8 @@ fn replace_session(conn: &Connection, session_id: &str, record: &SessionRecord) 
             &record.slug,
             &record.git_branch,
             &record.version,
-            &record.started_at,
-            &record.ended_at,
+            &record.started_at.as_ref().map(Timestamp::to_rfc3339),
+            &record.ended_at.as_ref().map(Timestamp::to_rfc3339),
             record.message_count,
         ],
     )?;
@@ -883,8 +884,8 @@ fn insert_tool_call_run(conn: &Connection, run: &ToolCallRun) -> Result<()> {
             run.output_size,
             serde_json::to_string(&run.file_paths)?,
             &run.status,
-            &run.started_at,
-            &run.finished_at,
+            &run.started_at.as_ref().map(Timestamp::to_rfc3339),
+            &run.finished_at.as_ref().map(Timestamp::to_rfc3339),
             run.duration_ms,
             run.start_ordinal,
             run.end_ordinal,
@@ -1101,8 +1102,8 @@ fn build_run(
         output_size: result.as_ref().and_then(|result| result.output_size),
         file_paths: use_info.file_paths,
         status: status.to_string(),
-        started_at: use_info.started_at.map(|timestamp| timestamp.to_rfc3339()),
-        finished_at: finished_at.map(|timestamp| timestamp.to_rfc3339()),
+        started_at: use_info.started_at.map(Timestamp::from),
+        finished_at: finished_at.map(Timestamp::from),
         duration_ms,
         start_ordinal: Some(use_info.start_ordinal),
         end_ordinal: result.as_ref().map(|result| result.end_ordinal),
@@ -1140,7 +1141,7 @@ fn build_orphan_run(
         file_paths: Vec::new(),
         status: "orphan".to_string(),
         started_at: None,
-        finished_at: result.finished_at.map(|timestamp| timestamp.to_rfc3339()),
+        finished_at: result.finished_at.map(Timestamp::from),
         duration_ms: None,
         start_ordinal: None,
         end_ordinal: Some(result.end_ordinal),
@@ -1291,8 +1292,12 @@ fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRecord> 
         slug: row.get(8)?,
         git_branch: row.get(9)?,
         version: row.get(10)?,
-        started_at: row.get(11)?,
-        ended_at: row.get(12)?,
+        started_at: row
+            .get::<_, Option<String>>(11)?
+            .and_then(|s| Timestamp::parse(&s)),
+        ended_at: row
+            .get::<_, Option<String>>(12)?
+            .and_then(|s| Timestamp::parse(&s)),
         message_count: row.get(13)?,
     })
 }
@@ -1317,8 +1322,12 @@ fn run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ToolCallRun> {
         output_size: row.get(13)?,
         file_paths: serde_json::from_str(&file_paths).unwrap_or_default(),
         status: row.get(15)?,
-        started_at: row.get(16)?,
-        finished_at: row.get(17)?,
+        started_at: row
+            .get::<_, Option<String>>(16)?
+            .and_then(|s| Timestamp::parse(&s)),
+        finished_at: row
+            .get::<_, Option<String>>(17)?
+            .and_then(|s| Timestamp::parse(&s)),
         duration_ms: row.get(18)?,
         start_ordinal: row.get(19)?,
         end_ordinal: row.get(20)?,

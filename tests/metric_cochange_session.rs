@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use chrono::{TimeZone, Utc};
 use spotter::metric_cochange_session::cochange_session;
-use spotter::session_facts::{FileEvent, RelationsOptions, SessionFacts};
+use spotter::session_facts::{CoordinationClass, FileEvent, RelationsOptions, SessionFacts};
 
 const GOLDEN: &str = "tests/golden/metric_cochange_session/pairs.json";
 
@@ -27,7 +27,11 @@ fn opts(fanout_cap: usize) -> RelationsOptions {
 fn sess(id: &str, coordinator: bool, edits: &[&str]) -> SessionFacts {
     SessionFacts {
         external_session_id: id.to_string(),
-        is_coordinator: coordinator,
+        coordination: if coordinator {
+            CoordinationClass::MultiRig
+        } else {
+            CoordinationClass::Single
+        },
         rigs: BTreeSet::new(),
         edits: edits
             .iter()

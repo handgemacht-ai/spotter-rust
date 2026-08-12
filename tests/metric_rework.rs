@@ -10,7 +10,8 @@ use std::collections::BTreeSet;
 
 use chrono::{TimeZone, Utc};
 use spotter::metric_rework::rework;
-use spotter::session_facts::{FileEvent, RelationsOptions, SessionFacts};
+use spotter::session_facts::{CoordinationClass, FileEvent, RelationsOptions, SessionFacts};
+use spotter::timestamp::Timestamp;
 
 fn opts() -> RelationsOptions {
     RelationsOptions {
@@ -23,7 +24,7 @@ fn opts() -> RelationsOptions {
 fn edit(path: &str, ts: Option<&str>) -> FileEvent {
     FileEvent {
         path: path.to_string(),
-        ts: ts.map(str::to_string),
+        ts: ts.and_then(Timestamp::parse),
         message_id: None,
     }
 }
@@ -32,7 +33,11 @@ fn edit(path: &str, ts: Option<&str>) -> FileEvent {
 fn session(id: &str, is_coordinator: bool, edits: Vec<FileEvent>) -> SessionFacts {
     SessionFacts {
         external_session_id: id.to_string(),
-        is_coordinator,
+        coordination: if is_coordinator {
+            CoordinationClass::MultiRig
+        } else {
+            CoordinationClass::Single
+        },
         rigs: BTreeSet::new(),
         edits,
         reads: vec![],

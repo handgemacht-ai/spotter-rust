@@ -15,9 +15,10 @@ use spotter::db::{SessionRecord, ToolCallRun};
 use spotter::scan::{LeanMessage, LeanStore};
 use spotter::session_facts::{
     bash_write_targets, build_canonicalizer, build_provenance, build_session_facts, filter_under,
-    Canonicalizer, FileEvent, RelationsOptions, SessionEvent, SessionEventKind, SessionFacts,
-    TurnUsage,
+    Canonicalizer, CoordinationClass, FileEvent, RelationsOptions, SessionEvent, SessionEventKind,
+    SessionFacts, TurnUsage,
 };
+use spotter::timestamp::Timestamp;
 
 fn opts() -> RelationsOptions {
     RelationsOptions {
@@ -47,7 +48,7 @@ fn base_run(external: &str, session: &str, ordinal: i64) -> ToolCallRun {
         output_size: None,
         file_paths: Vec::new(),
         status: "ok".to_string(),
-        started_at: Some(format!(
+        started_at: Timestamp::parse(&format!(
             "2026-06-15T10:{:02}:00+00:00",
             ordinal.clamp(0, 59)
         )),
@@ -135,7 +136,7 @@ fn se_path(path: Option<&str>) -> SessionEvent {
 
 fn se_ts(ts: &str) -> SessionEvent {
     SessionEvent {
-        ts: Some(ts.to_string()),
+        ts: Timestamp::parse(ts),
         kind: SessionEventKind::Other,
         path: None,
         success: true,
@@ -251,7 +252,7 @@ fn four_distinct_cwds_flag_a_coordinator() {
     let facts = build(&store);
     assert_eq!(facts.len(), 1);
     assert!(
-        facts[0].is_coordinator,
+        facts[0].coordination.is_coordinator(),
         "four distinct working directories cross the >3-cwd coordinator threshold"
     );
 }
@@ -277,7 +278,7 @@ fn three_distinct_cwds_stay_below_the_coordinator_threshold() {
     let facts = build(&store);
     assert_eq!(facts.len(), 1);
     assert!(
-        !facts[0].is_coordinator,
+        !facts[0].coordination.is_coordinator(),
         "three working directories are below the coordinator threshold"
     );
 }
@@ -330,7 +331,7 @@ fn runs_outside_a_known_rig_are_dropped() {
         "the known-rig noise filter drops the out-of-rig run"
     );
     assert!(
-        !facts[0].is_coordinator,
+        !facts[0].coordination.is_coordinator(),
         "one surviving rig is not a coordinator"
     );
 }
@@ -341,7 +342,7 @@ fn filter_under_keeps_only_paths_beneath_the_root() {
     let outside = "/srv/other/b.rs";
     let kept = SessionFacts {
         external_session_id: "keep".to_string(),
-        is_coordinator: false,
+        coordination: CoordinationClass::Single,
         rigs: BTreeSet::new(),
         edits: vec![fe(inside), fe(outside)],
         reads: vec![fe(outside)],
@@ -354,7 +355,7 @@ fn filter_under_keeps_only_paths_beneath_the_root() {
     };
     let dropped = SessionFacts {
         external_session_id: "drop".to_string(),
-        is_coordinator: false,
+        coordination: CoordinationClass::Single,
         rigs: BTreeSet::new(),
         edits: vec![fe(outside)],
         reads: Vec::new(),
@@ -401,7 +402,7 @@ fn provenance_orders_by_recency_then_caps_at_twenty() {
     // fold sees the "already-recorded, not newer" branch as well as the first.
     let touch_session = |id: &str, ts: &str| SessionFacts {
         external_session_id: id.to_string(),
-        is_coordinator: false,
+        coordination: CoordinationClass::Single,
         rigs: BTreeSet::new(),
         edits: vec![fe(file)],
         reads: vec![fe(file)],

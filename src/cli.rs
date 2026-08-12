@@ -1316,9 +1316,7 @@ fn scan_search(
     let mut runs = analytics::search_runs_in(store.runs, &filters);
     runs.sort_by(|left, right| {
         left.started_at
-            .as_deref()
-            .unwrap_or("")
-            .cmp(right.started_at.as_deref().unwrap_or(""))
+            .cmp(&right.started_at)
             .then_with(|| left.start_ordinal.cmp(&right.start_ordinal))
             .then_with(|| left.tool_use_id.cmp(&right.tool_use_id))
     });
@@ -1574,7 +1572,10 @@ pub fn build_relations_envelope(facts: &[SessionFacts], opts: &RelationsOptions)
     envelope.insert("since_days".to_string(), json!(opts.since_days));
     envelope.insert("fanout_cap".to_string(), json!(opts.fanout_cap));
     envelope.insert("session_count".to_string(), json!(facts.len()));
-    let coordinator_count = facts.iter().filter(|facts| facts.is_coordinator).count();
+    let coordinator_count = facts
+        .iter()
+        .filter(|facts| facts.coordination.is_coordinator())
+        .count();
     envelope.insert("coordinator_count".to_string(), json!(coordinator_count));
     for spec in RELATIONS_REGISTRY {
         envelope.insert(spec.key.to_string(), (spec.run)(facts, opts));

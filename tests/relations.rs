@@ -12,8 +12,10 @@ use chrono::{TimeZone, Utc};
 use serde_json::Value;
 use spotter::cli::build_relations_envelope;
 use spotter::session_facts::{
-    FileEvent, RelationsOptions, SessionEvent, SessionEventKind, SessionFacts, TurnUsage,
+    CoordinationClass, FileEvent, RelationsOptions, SessionEvent, SessionEventKind, SessionFacts,
+    TurnUsage,
 };
+use spotter::timestamp::Timestamp;
 use tempfile::NamedTempFile;
 
 const FIXTURE_ROOT: &str = "tests/fixtures/transcripts";
@@ -32,13 +34,13 @@ fn fixed_opts() -> RelationsOptions {
 fn fixed_facts() -> Vec<SessionFacts> {
     let edit = |path: &str, ts: &str, message: &str| FileEvent {
         path: path.to_string(),
-        ts: Some(ts.to_string()),
+        ts: Timestamp::parse(ts),
         message_id: Some(message.to_string()),
     };
     vec![
         SessionFacts {
             external_session_id: "sess-alpha".to_string(),
-            is_coordinator: false,
+            coordination: CoordinationClass::Single,
             rigs: BTreeSet::from(["/srv/town/rig-a".to_string()]),
             edits: vec![
                 edit(
@@ -54,7 +56,7 @@ fn fixed_facts() -> Vec<SessionFacts> {
             ],
             reads: vec![FileEvent {
                 path: "/srv/town/rig-a/README.md".to_string(),
-                ts: Some("2026-06-30T09:59:00+00:00".to_string()),
+                ts: Timestamp::parse("2026-06-30T09:59:00+00:00"),
                 message_id: Some("msg-0".to_string()),
             }],
             turns: vec![
@@ -71,14 +73,14 @@ fn fixed_facts() -> Vec<SessionFacts> {
             ],
             events: vec![
                 SessionEvent {
-                    ts: Some("2026-06-30T09:59:00+00:00".to_string()),
+                    ts: Timestamp::parse("2026-06-30T09:59:00+00:00"),
                     kind: SessionEventKind::Read,
                     path: Some("/srv/town/rig-a/README.md".to_string()),
                     success: true,
                     message_id: Some("msg-0".to_string()),
                 },
                 SessionEvent {
-                    ts: Some("2026-06-30T10:00:00+00:00".to_string()),
+                    ts: Timestamp::parse("2026-06-30T10:00:00+00:00"),
                     kind: SessionEventKind::Edit,
                     path: Some("/srv/town/rig-a/src/lib.rs".to_string()),
                     success: true,
@@ -88,7 +90,7 @@ fn fixed_facts() -> Vec<SessionFacts> {
         },
         SessionFacts {
             external_session_id: "sess-coord".to_string(),
-            is_coordinator: true,
+            coordination: CoordinationClass::MultiRig,
             rigs: BTreeSet::from(["/srv/town/rig-a".to_string(), "/srv/town/rig-b".to_string()]),
             edits: vec![edit(
                 "/srv/town/rig-b/main.go",
@@ -102,7 +104,7 @@ fn fixed_facts() -> Vec<SessionFacts> {
                 files: vec!["/srv/town/rig-b/main.go".to_string()],
             }],
             events: vec![SessionEvent {
-                ts: Some("2026-06-29T08:00:00+00:00".to_string()),
+                ts: Timestamp::parse("2026-06-29T08:00:00+00:00"),
                 kind: SessionEventKind::Edit,
                 path: Some("/srv/town/rig-b/main.go".to_string()),
                 success: true,

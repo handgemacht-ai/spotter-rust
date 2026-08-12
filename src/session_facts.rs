@@ -16,6 +16,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::scan::{LeanMessage, LeanStore};
+use crate::timestamp::Timestamp;
 
 /// Options shared by every relations metric.
 #[derive(Debug, Clone)]
@@ -34,7 +35,7 @@ pub struct FileEvent {
     /// Canonical file path.
     pub path: String,
     /// RFC3339 timestamp of the tool call, when known.
-    pub ts: Option<String>,
+    pub ts: Option<Timestamp>,
     /// `message.id` of the assistant turn that issued the tool call, when known.
     pub message_id: Option<String>,
 }
@@ -71,7 +72,7 @@ pub enum SessionEventKind {
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionEvent {
     /// RFC3339 timestamp, when known.
-    pub ts: Option<String>,
+    pub ts: Option<Timestamp>,
     /// Event kind.
     pub kind: SessionEventKind,
     /// Canonical file path the event targets, when applicable.
@@ -82,14 +83,64 @@ pub struct SessionEvent {
     pub message_id: Option<String>,
 }
 
+/// Thresholds for the coordinator classification. Every other threshold in
+/// this module is a named `const`; these two were the only inline magic
+/// literals.
+const COORD_RIG_THRESHOLD: usize = 1;
+const COORD_CWD_THRESHOLD: usize = 3;
+
+/// How broadly a session spreads across rigs and working directories.
+///
+/// `Single` sessions stay within one rig and at most [`COORD_CWD_THRESHOLD`]
+/// cwds and feed the pairwise metrics; `MultiRig` and `ManyCwd` sessions are
+/// coordinators and are excluded from them. Replacing the prior `is_coordinator:
+/// bool` field, this named the two inline magic literals (`1` and `3`) that were
+/// the only unnamed thresholds in the fold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoordinationClass {
+    /// One rig and at most [`COORD_CWD_THRESHOLD`] cwds: feeds pairwise metrics.
+    Single,
+    /// More than [`COORD_RIG_THRESHOLD`] rig.
+    MultiRig,
+    /// More than [`COORD_CWD_THRESHOLD`] cwd within a single rig.
+    ManyCwd,
+}
+
+impl CoordinationClass {
+    /// Classify a session by how many distinct rigs and cwds it touched.
+    ///
+    /// A session crossing both thresholds is `MultiRig` (rig spread dominates);
+    /// this matches the prior `rigs.len() > 1 || distinct_cwds.len() > 3` guard.
+    #[must_use]
+    pub fn classify(rigs: &BTreeSet<String>, distinct_cwds: &BTreeSet<String>) -> Self {
+        if rigs.len() > COORD_RIG_THRESHOLD {
+            Self::MultiRig
+        } else if distinct_cwds.len() > COORD_CWD_THRESHOLD {
+            Self::ManyCwd
+        } else {
+            Self::Single
+        }
+    }
+
+    /// Whether this class is a coordinator (excluded from pairwise metrics).
+    ///
+    /// Equivalent to `*self != Self::Single`; kept as a named accessor so the
+    /// consumer sites read as the prior `is_coordinator` bool check.
+    #[must_use]
+    pub const fn is_coordinator(self) -> bool {
+        !matches!(self, Self::Single)
+    }
+}
+
 /// All facts mined for one logical session.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionFacts {
     /// Logical grouping key (parent + sidecars folded).
     pub external_session_id: String,
-    /// Whether the session is a coordinator (spans `>1` rig or `>3` cwds) and is
-    /// therefore excluded from pairwise metrics.
-    pub is_coordinator: bool,
+    /// How broadly the session spreads; coordinators (`MultiRig`/`ManyCwd`) are
+    /// excluded from pairwise metrics. See [`CoordinationClass::classify`].
+    pub coordination: CoordinationClass,
     /// Canonical rig repo roots the session touched.
     pub rigs: BTreeSet<String>,
     /// File edits, in event order.
@@ -106,11 +157,8 @@ impl SessionFacts {
     /// The most recent event timestamp in the session, used for provenance
     /// recency ordering.
     #[must_use]
-    pub fn last_activity(&self) -> Option<&str> {
-        self.events
-            .iter()
-            .filter_map(|event| event.ts.as_deref())
-            .max()
+    pub fn last_activity(&self) -> Option<Timestamp> {
+        self.events.iter().filter_map(|event| event.ts).max()
     }
 }
 
@@ -450,10 +498,8 @@ pub fn build_session_facts(
         // to the back; ordinal (chronological *within* one transcript) then
         // tool_use_id break ties deterministically.
         runs.sort_by(|left, right| {
-            let lt = left.started_at.as_deref();
-            let rt = right.started_at.as_deref();
-            (lt.is_none(), lt)
-                .cmp(&(rt.is_none(), rt))
+            (left.started_at.is_none(), left.started_at)
+                .cmp(&(right.started_at.is_none(), right.started_at))
                 .then_with(|| {
                     left.start_ordinal
                         .unwrap_or(i64::MAX)
@@ -503,7 +549,7 @@ pub fn build_session_facts(
                 rigs.insert(rig.to_string());
             }
 
-            let ts = run.started_at.clone();
+            let ts = run.started_at;
             let success = run.status != "error";
             let kind = classify(&run.tool_name);
             match kind {
@@ -517,13 +563,13 @@ pub fn build_session_facts(
                             let path = canon.canonical(raw);
                             reads.push(FileEvent {
                                 path: path.clone(),
-                                ts: ts.clone(),
+                                ts,
                                 message_id: message_id.clone(),
                             });
                         }
                     }
                     events.push(SessionEvent {
-                        ts: ts.clone(),
+                        ts,
                         kind,
                         path: run.file_paths.first().map(|raw| canon.canonical(raw)),
                         success,
@@ -549,7 +595,7 @@ pub fn build_session_facts(
                         );
                     }
                     events.push(SessionEvent {
-                        ts: ts.clone(),
+                        ts,
                         kind,
                         path: paths.first().cloned(),
                         success,
@@ -580,7 +626,7 @@ pub fn build_session_facts(
                         );
                     }
                     events.push(SessionEvent {
-                        ts: ts.clone(),
+                        ts,
                         kind,
                         path: paths.first().cloned(),
                         success,
@@ -589,7 +635,7 @@ pub fn build_session_facts(
                 }
                 other => {
                     events.push(SessionEvent {
-                        ts: ts.clone(),
+                        ts,
                         kind: other,
                         path: None,
                         success,
@@ -629,10 +675,10 @@ pub fn build_session_facts(
             continue;
         }
 
-        let is_coordinator = rigs.len() > 1 || distinct_cwds.len() > 3;
+        let coordination = CoordinationClass::classify(&rigs, &distinct_cwds);
         facts.push(SessionFacts {
             external_session_id: external_session_id.clone(),
-            is_coordinator,
+            coordination,
             rigs,
             edits,
             reads,
@@ -646,7 +692,7 @@ pub fn build_session_facts(
 
 fn record_edits(
     paths: &[String],
-    ts: &Option<String>,
+    ts: &Option<Timestamp>,
     message_id: Option<&String>,
     edits: &mut Vec<FileEvent>,
     turn_files: &mut BTreeMap<String, BTreeSet<String>>,
@@ -654,7 +700,7 @@ fn record_edits(
     for path in paths {
         edits.push(FileEvent {
             path: path.clone(),
-            ts: ts.clone(),
+            ts: *ts,
             message_id: message_id.cloned(),
         });
         if let Some(message_id) = message_id {
@@ -715,7 +761,7 @@ pub fn filter_under(facts: Vec<SessionFacts>, root: &str) -> Vec<SessionFacts> {
             }
             Some(SessionFacts {
                 external_session_id: session.external_session_id,
-                is_coordinator: session.is_coordinator,
+                coordination: session.coordination,
                 rigs: session.rigs,
                 edits,
                 reads,
@@ -731,17 +777,17 @@ pub fn filter_under(facts: Vec<SessionFacts>, root: &str) -> Vec<SessionFacts> {
 #[must_use]
 pub fn build_provenance(facts: &[SessionFacts]) -> Vec<FileProvenance> {
     // path -> (session_id -> most-recent ts seen for that session/file).
-    let mut per_file: BTreeMap<String, BTreeMap<String, Option<String>>> = BTreeMap::new();
+    let mut per_file: BTreeMap<String, BTreeMap<String, Option<Timestamp>>> = BTreeMap::new();
     for session in facts {
-        let recency = session.last_activity().map(ToString::to_string);
+        let recency = session.last_activity();
         let mut touch = |path: &str| {
             let entry = per_file
                 .entry(path.to_string())
                 .or_default()
                 .entry(session.external_session_id.clone())
                 .or_insert(None);
-            if recency.as_deref() > entry.as_deref() {
-                *entry = recency.clone();
+            if recency > *entry {
+                *entry = recency;
             }
         };
         for event in session.edits.iter().chain(&session.reads) {
@@ -752,7 +798,7 @@ pub fn build_provenance(facts: &[SessionFacts]) -> Vec<FileProvenance> {
     let mut provenance: Vec<FileProvenance> = per_file
         .into_iter()
         .map(|(path, sessions)| {
-            let mut ordered: Vec<(String, Option<String>)> = sessions.into_iter().collect();
+            let mut ordered: Vec<(String, Option<Timestamp>)> = sessions.into_iter().collect();
             // Most recent first; ties broken by session id for determinism.
             ordered.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
             let session_ids = ordered
@@ -876,7 +922,7 @@ mod tests {
             output_size: None,
             file_paths: vec![file.to_string()],
             status: status.to_string(),
-            started_at: Some(started_at.to_string()),
+            started_at: Timestamp::parse(started_at),
             finished_at: None,
             duration_ms: None,
             start_ordinal: Some(ordinal),

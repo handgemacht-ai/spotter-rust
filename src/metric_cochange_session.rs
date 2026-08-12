@@ -76,7 +76,10 @@ pub fn cochange_session(facts: &[SessionFacts], opts: &RelationsOptions) -> Coch
     // Ordered-pair support: distinct sessions editing both `a` and `b`.
     let mut pair_support: BTreeMap<(&str, &str), usize> = BTreeMap::new();
 
-    for session in facts.iter().filter(|session| !session.is_coordinator) {
+    for session in facts
+        .iter()
+        .filter(|session| !session.coordination.is_coordinator())
+    {
         // Distinct edited paths, deterministically ordered for the fan-out cap.
         let distinct: BTreeSet<&str> = session
             .edits
