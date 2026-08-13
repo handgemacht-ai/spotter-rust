@@ -14,6 +14,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+use crate::duration::Millis;
 use crate::jsonl::{content_blocks, is_known_content_block_type, ParsedSession, TranscriptMessage};
 use crate::timestamp::Timestamp;
 
@@ -1080,7 +1081,8 @@ fn build_run(
         None => "ongoing",
     };
     let finished_at = result.as_ref().and_then(|result| result.finished_at);
-    let duration_ms = duration_ms(use_info.started_at, finished_at);
+    let duration_ms: Option<i64> =
+        duration_ms(use_info.started_at, finished_at).map(Millis::as_inner);
     let read_total_lines = result.as_ref().and_then(|result| result.read_total_lines);
     let read_lines = result.as_ref().and_then(|result| result.read_lines);
     let read_truncated = result.as_ref().and_then(|result| result.read_truncated);
@@ -1156,8 +1158,16 @@ fn build_orphan_run(
     }
 }
 
-fn duration_ms(start: Option<DateTime<Utc>>, end: Option<DateTime<Utc>>) -> Option<i64> {
-    Some(end?.signed_duration_since(start?).num_milliseconds())
+/// Elapsed milliseconds between a run's start and finish, or `None` when
+/// either timestamp is missing.
+///
+/// Returns [`Millis`] so the seconds/millis unit is named at the computation
+/// seam; the [`ToolCallRun::duration_ms`] field keeps `Option<i64>` at the
+/// serialized DB boundary.
+fn duration_ms(start: Option<DateTime<Utc>>, end: Option<DateTime<Utc>>) -> Option<Millis> {
+    Some(Millis::from_inner(
+        end?.signed_duration_since(start?).num_milliseconds(),
+    ))
 }
 
 fn input_summary(input: &Value) -> Option<String> {

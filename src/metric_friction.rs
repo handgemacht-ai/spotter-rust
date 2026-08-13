@@ -5,12 +5,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
+use crate::duration::Seconds;
 use crate::session_facts::{RelationsOptions, SessionFacts};
 
-/// Active-time gap cap in seconds: any pause longer than this between two
-/// consecutive events is clamped, so overnight-idle stretches do not inflate a
-/// session's active time.
-const GAP_CAP_SECONDS: i64 = 300;
+/// Active-time gap cap: any pause longer than this between two consecutive
+/// events is clamped, so overnight-idle stretches do not inflate a session's
+/// active time.
+const GAP_CAP: Seconds = Seconds::from_inner(300);
 
 /// Active-time summary for one cohort (readers or editors) of a file.
 ///
@@ -50,7 +51,7 @@ pub struct FrictionResult {
 /// Coordinator sessions are excluded (a coordinator's long, multi-rig active
 /// time would swamp the cohorts). For each remaining logical session the active
 /// time is the sum of consecutive-event gaps, each capped at
-/// [`GAP_CAP_SECONDS`]. Every file that any surviving session read or edited is
+/// [`GAP_CAP`]. Every file that any surviving session read or edited is
 /// reported; the read and edit cohorts are counted independently and each yields
 /// a median and p90 of its sessions' active time.
 #[must_use]
@@ -58,7 +59,7 @@ pub fn friction(facts: &[SessionFacts], opts: &RelationsOptions) -> FrictionResu
     let _ = opts;
 
     // Per-session active seconds, keyed by logical session id, coordinators out.
-    let mut active: BTreeMap<&str, i64> = BTreeMap::new();
+    let mut active: BTreeMap<&str, Seconds> = BTreeMap::new();
     // Canonical path -> the logical sessions that read / edited it.
     let mut readers: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     let mut editors: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
@@ -107,10 +108,10 @@ pub fn friction(facts: &[SessionFacts], opts: &RelationsOptions) -> FrictionResu
     FrictionResult { files }
 }
 
-/// Sum the consecutive-event gaps of a session, each capped at
-/// [`GAP_CAP_SECONDS`]. Events without a parseable timestamp are ignored; the
-/// remaining timestamps are ordered so a gap is never negative.
-fn active_seconds(session: &SessionFacts) -> i64 {
+/// Sum the consecutive-event gaps of a session, each capped at [`GAP_CAP`].
+/// Events without a parseable timestamp are ignored; the remaining timestamps
+/// are ordered so a gap is never negative.
+fn active_seconds(session: &SessionFacts) -> Seconds {
     let mut seconds: Vec<i64> = session
         .events
         .iter()
@@ -118,40 +119,41 @@ fn active_seconds(session: &SessionFacts) -> i64 {
         .map(|ts| ts.as_inner().timestamp())
         .collect();
     seconds.sort_unstable();
-    seconds
+    let total: i64 = seconds
         .windows(2)
-        .map(|pair| (pair[1] - pair[0]).clamp(0, GAP_CAP_SECONDS))
-        .sum()
+        .map(|pair| (pair[1] - pair[0]).clamp(0, GAP_CAP.as_inner()))
+        .sum();
+    Seconds::from_inner(total)
 }
 
 /// Reduce a cohort of sessions to a [`FrictionStat`] over their active times.
 ///
 /// A missing cohort (no session read or edited the file) yields the zero stat.
-fn cohort_stat(active: &BTreeMap<&str, i64>, cohort: Option<&BTreeSet<&str>>) -> FrictionStat {
+fn cohort_stat(active: &BTreeMap<&str, Seconds>, cohort: Option<&BTreeSet<&str>>) -> FrictionStat {
     let Some(sessions) = cohort else {
         return FrictionStat::default();
     };
-    let mut values: Vec<i64> = sessions
+    let mut values: Vec<Seconds> = sessions
         .iter()
-        .map(|sid| active.get(*sid).copied().unwrap_or(0))
+        .map(|sid| active.get(*sid).copied().unwrap_or_default())
         .collect();
     values.sort_unstable();
     FrictionStat {
         sessions: values.len(),
-        median_active_seconds: percentile(&values, 50),
-        p90_active_seconds: percentile(&values, 90),
+        median_active_seconds: percentile(&values, 50).as_inner(),
+        p90_active_seconds: percentile(&values, 90).as_inner(),
     }
 }
 
 /// Nearest-rank percentile over an ascending-sorted slice, matching the
 /// convention used elsewhere in `spotter` (see `analytics::percentile`). Returns
-/// `0` for an empty cohort.
-fn percentile(sorted: &[i64], pct: usize) -> i64 {
+/// `Seconds::default()` for an empty cohort.
+fn percentile(sorted: &[Seconds], pct: usize) -> Seconds {
     if sorted.is_empty() {
-        return 0;
+        return Seconds::default();
     }
     let index = (sorted.len() * pct).div_ceil(100).saturating_sub(1);
-    sorted.get(index).copied().unwrap_or(0)
+    sorted.get(index).copied().unwrap_or_default()
 }
 
 #[cfg(test)]
