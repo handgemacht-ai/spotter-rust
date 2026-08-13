@@ -355,12 +355,69 @@ fn git_worktrees(dir: &str) -> Option<Vec<(String, Option<String>)>> {
     }
 }
 
+/// A typed, zero-allocation view over the raw `tool_name` string stored on a
+/// [`crate::db::ToolCallRun`].
+///
+/// The string is kept as `String` at the DB/serialization boundary because
+/// transcripts may carry arbitrary tool names and an unknown value must never
+/// fail to parse. This borrowed newtype is constructed at the read seam and
+/// centralizes the [`SessionEventKind`] classification — plus the edit and
+/// Bash recognition — that was previously scattered across the free `classify`
+/// function, `is_edit_tool`, and inline `== "Bash"` literals. It mirrors the
+/// already-typed [`SessionEventKind`] the classification produces.
+#[derive(Debug, Clone, Copy)]
+pub struct ToolName<'a>(&'a str);
+
+impl<'a> ToolName<'a> {
+    /// The `Bash` tool name.
+    const BASH: &'static str = "Bash";
+
+    /// Wrap a raw `tool_name` string without allocating.
+    #[must_use]
+    pub fn new(name: &'a str) -> Self {
+        Self(name)
+    }
+
+    /// The raw tool name string.
+    #[must_use]
+    pub fn as_str(&self) -> &'a str {
+        self.0
+    }
+
+    /// Whether this is a `Bash` tool call.
+    #[must_use]
+    pub fn is_bash(&self) -> bool {
+        self.0 == Self::BASH
+    }
+
+    /// Whether this is a file-editing tool (`Edit`/`Write`/`MultiEdit`/`NotebookEdit`).
+    #[must_use]
+    pub fn is_edit(&self) -> bool {
+        EDIT_TOOLS.contains(&self.0)
+    }
+
+    /// Classify the tool into a [`SessionEventKind`].
+    #[must_use]
+    pub fn classify(&self) -> SessionEventKind {
+        match self.0 {
+            "Read" => SessionEventKind::Read,
+            "Grep" => SessionEventKind::Grep,
+            "Glob" => SessionEventKind::Glob,
+            _ if self.is_edit() => SessionEventKind::Edit,
+            _ => SessionEventKind::Other,
+        }
+    }
+}
+
 const EDIT_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
 
 /// Whether a tool name is a file-editing tool.
+///
+/// Delegates to [`ToolName::is_edit`] so the string-match lives on the typed
+/// view; kept as a free function for callers that already hold a raw `&str`.
 #[must_use]
 pub fn is_edit_tool(tool: &str) -> bool {
-    EDIT_TOOLS.contains(&tool)
+    ToolName::new(tool).is_edit()
 }
 
 /// Detect files written by a Bash command, best-effort, from the command string.
@@ -551,7 +608,8 @@ pub fn build_session_facts(
 
             let ts = run.started_at;
             let success = run.status != "error";
-            let kind = classify(&run.tool_name);
+            let tool = ToolName::new(&run.tool_name);
+            let kind = tool.classify();
             match kind {
                 SessionEventKind::Read => {
                     // A failed Read (file-not-found, etc.) loaded nothing, so it
@@ -602,7 +660,7 @@ pub fn build_session_facts(
                         message_id: message_id.clone(),
                     });
                 }
-                _ if run.tool_name == "Bash" => {
+                _ if tool.is_bash() => {
                     let mut paths: Vec<String> = Vec::new();
                     if let Some(command) = &run.command {
                         for raw in bash_write_targets(command) {
@@ -709,16 +767,6 @@ fn record_edits(
                 .or_default()
                 .insert(path.clone());
         }
-    }
-}
-
-fn classify(tool: &str) -> SessionEventKind {
-    match tool {
-        "Read" => SessionEventKind::Read,
-        "Grep" => SessionEventKind::Grep,
-        "Glob" => SessionEventKind::Glob,
-        tool if is_edit_tool(tool) => SessionEventKind::Edit,
-        _ => SessionEventKind::Other,
     }
 }
 
