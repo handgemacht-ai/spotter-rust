@@ -374,13 +374,13 @@ impl<'a> ToolName<'a> {
 
     /// Wrap a raw `tool_name` string without allocating.
     #[must_use]
-    pub fn new(name: &'a str) -> Self {
+    pub const fn new(name: &'a str) -> Self {
         Self(name)
     }
 
     /// The raw tool name string.
     #[must_use]
-    pub fn as_str(&self) -> &'a str {
+    pub const fn as_str(&self) -> &'a str {
         self.0
     }
 
@@ -1105,5 +1105,12 @@ mod tests {
         );
         assert_eq!(session.reads.len(), 1);
         assert_eq!(session.edits.len(), 1);
+    }
+
+    #[test]
+    fn tool_name_new_and_as_str_are_const_fn() {
+        const NAME: ToolName<'static> = ToolName::new("const-marker");
+        const AS_STR: &str = NAME.as_str();
+        assert_eq!(AS_STR, "const-marker");
     }
 }
