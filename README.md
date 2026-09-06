@@ -66,10 +66,14 @@ root.
 | `scan health --session`     | Per-session token-health analysis: cache window, cache misses, token jumps, peak context, total waste. |
 | `scan health` (no session)  | Project-level rollup of token-health metrics. |
 | `scan sequences`            | Detect frequent tool-call n-grams and retry patterns. `--recovery` adds recovery-rate stats. |
+| `scan read-scores`         | Score how often files are opened via the Read tool. `--half-life-days N` (default 30) is a recency half-life: a read this many days old counts half as much. `--under <prefix>` keeps only paths under that prefix (after worktree normalization); `--ext <ext>` (no dot) filters by extension; `--limit N` (0 = all) caps rows, most-read first. Defaults to `--format json`. |
+| `scan relations`            | Mine cross-file usage relations from transcripts. `--since N` (default 30 days) is the metric window and also mtime-prunes the transcript file list. `--under <root>` applies an optional canonical root filter to file paths after normalization; `--fanout-cap K` (default 100) caps pair emission. Defaults to `--format json`. |
 
 ### Output formats
 
-Every subcommand accepts `--format table` (default) or `--format json`. The
+Every subcommand accepts `--format table` or `--format json`. The eight
+original subcommands default to `table`; `scan read-scores` and `scan relations`
+default to `json`. The
 JSON shape is identical to the matching `transcripts <verb>` JSON shape; this
 is pinned by integration tests that sync a fixture into SQLite, run both
 paths, and assert byte-equivalent JSON.

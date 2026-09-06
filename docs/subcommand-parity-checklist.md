@@ -98,6 +98,26 @@ refer to `--min-duration-ms`, but the carried-over search task accepts
 
 ## Added Commands
 
+New Rust-only commands beyond the carried-over Elixir surface. `spotter scan`
+runs the same analytics as `spotter transcripts <verb>` on a DB-less,
+in-memory store (`src/scan.rs`). Bare `spotter scan` prints a help index, and
+the scan-level options `--file <path>` (repeatable), `--root <path>`
+(repeatable), and `--no-subagents` apply to every scan subcommand (`src/cli.rs`).
+With no `--file`/`--root` and no configured `transcript_roots`, scan falls
+back to walking `~/.claude/projects` and `~/.claude_agents/projects` when
+they exist (`src/scan.rs` `default_roots`).
+
+Nine of the scan rows below are backed by `tests/cli_scan.rs`,
+`tests/scan_loader.rs`, `tests/relations.rs`, `tests/relations_read_clusters.rs`,
+and `tests/cli_surface.rs`. Two rows currently lack a dedicated scan-path
+integration test and are left unchecked:
+
+- `spotter scan compare` — the only compare tests
+  (`tests/cli_flag_parity.rs:142,170`; `tests/cli_inspect_compare_aggregate.rs:6`)
+  exercise the `spotter transcripts compare` (DB) path, not `scan compare`.
+- `spotter scan read-scores` — no test in `tests/` references `read-scores`,
+  `read_scores`, or its `--half-life-days` flag.
+
 | Status | Rust command | Flags |
 | --- | --- | --- |
 | [x] | `spotter init` | `--claude-projects <path>`, `--yes` |
@@ -105,3 +125,14 @@ refer to `--min-duration-ms`, but the carried-over search task accepts
 | [x] | `spotter projects add` | `<alias> <path>` |
 | [x] | `spotter projects remove` | `<alias>` |
 | [x] | `spotter projects alias` | `<old-alias> <new-alias>` |
+| [x] | `spotter scan` | help index; scan-level `--file <path>`, `--root <path>`, `--no-subagents` (global to every scan subcommand) |
+| [x] | `spotter scan search` | `--project <alias>`, `--worktree <name>`, `--session <id>`, `--tool <name>`, `--command-contains <text>`, `--error-contains <text>`, `--file-path <path>`, `--content-contains <text>`, `--min-duration <ms>`, `--max-duration <ms>`, `--min-read-lines <n>`, `--status <status>`, `--since <date or timestamp>`, `--limit <n>`, `--format <fmt>`, `--group-by-session` |
+| [x] | `spotter scan inspect` | `--session <id>` (required), `--tool-use-id <id>`, `--context <n>`, `--status <status>`, `--with-messages`, `--format <fmt>` |
+| [ ] | `spotter scan compare` | `--left-session <id>` (repeatable), `--right-session <id>` (repeatable), `--tool <name>`, `--command-contains <text>`, `--group-by <field>`, `--format <fmt>` |
+| [x] | `spotter scan aggregate` | `--project <alias>`, `--since <YYYY-MM-DD>`, `--tool <name>`, `--group-by <fields>`, `--format <fmt>` |
+| [x] | `spotter scan audit` | `--limit <n>`, `--format <fmt>` |
+| [x] | `spotter scan errors` | `--project <alias>`, `--session <id>`, `--since <YYYY-MM-DD>`, `--tool <name>`, `--top <n>`, `--classify`, `--format <fmt>` |
+| [x] | `spotter scan health` | `--session <id>`, `--project <alias>`, `--since <YYYY-MM-DD>`, `--limit <n>`, `--format <fmt>` |
+| [x] | `spotter scan sequences` | `--project <alias>`, `--since <YYYY-MM-DD>`, `--min-length <n>`, `--max-length <n>`, `--min-occurrences <n>`, `--recovery`, `--format <fmt>` |
+| [ ] | `spotter scan read-scores` | `--half-life-days <days>`, `--under <prefix>`, `--ext <ext>`, `--limit <n>`, `--format <fmt>` |
+| [x] | `spotter scan relations` | `--since <days>`, `--under <prefix>`, `--fanout-cap <K>`, `--format <fmt>` |
