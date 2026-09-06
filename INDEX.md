@@ -1,7 +1,7 @@
 ---
 type: index
-last_verified: 2026-07-21
-upstream_commit: 28a5dac
+last_verified: 2026-09-06
+upstream_commit: b0111dc
 sources:
   - spotter-rust/README.md
   - spotter-rust/docs/crates-io-name-decision.md
